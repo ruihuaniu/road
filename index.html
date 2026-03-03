@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>World Road Quality Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Barlow+Condensed:wght@300;400;600;700&display=swap');
+
+  /* ── Theme variables ── */
+  :root,
+  [data-theme="dark"] {
+    --bg:      #0d1117;
+    --panel:   #161b22;
+    --border:  #30363d;
+    --accent:  #f0c040;
+    --text:    #e6edf3;
+    --muted:   #8b949e;
+    --hover:   rgba(255,255,255,0.05);
+    --stat-bg: #0d1117;
+    --shadow:  0 4px 24px rgba(0,0,0,0.5);
+  }
+
+  [data-theme="light"] {
+    --bg:      #f4f6f8;
+    --panel:   #ffffff;
+    --border:  #d0d7de;
+    --accent:  #b07d00;
+    --text:    #1c2128;
+    --muted:   #57606a;
+    --hover:   rgba(0,0,0,0.04);
+    --stat-bg: #f4f6f8;
+    --shadow:  0 4px 24px rgba(0,0,0,0.12);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Barlow Condensed', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: background 0.3s, color 0.3s;
+  }
+
+  /* ── Header ── */
+  header {
+    background: var(--panel);
+    border-bottom: 2px solid var(--accent);
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 1000;
+    flex-shrink: 0;
+    box-shadow: var(--shadow);
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+
+  .logo { display: flex; align-items: baseline; gap: 10px; }
+
+  .logo h1 {
+    font-family: 'Space Mono', monospace;
+    font-size: 1.25rem;
+    color: var(--accent);
+    letter-spacing: -1px;
+    transition: color 0.3s;
+  }
+
+  .logo span {
+    font-size: 0.82rem;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--muted);
+  }
+
+  .status-location {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.3;
+  }
+
+  .status-region {
+    color: var(--text);
+    font-size: 0.68rem;
+    letter-spacing: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+    transition: color 0.3s;
+  }
+
+  .status-country {
+    color: var(--accent);
+    font-size: 0.6rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    transition: color 0.3s;
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #3fb950;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.3; }
+  }
+
+  /* ── Theme toggle ── */
+  .theme-toggle {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .theme-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.62rem;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+    transition: color 0.3s;
+  }
+
+  .toggle-track {
+    width: 36px; height: 20px;
+    background: var(--border);
+    border-radius: 10px;
+    position: relative;
+    transition: background 0.25s;
+  }
+
+  .toggle-track.light { background: var(--accent); }
+
+  .toggle-thumb {
+    width: 14px; height: 14px;
+    background: #fff;
+    border-radius: 50%;
+    position: absolute;
+    top: 3px; left: 3px;
+    transition: transform 0.25s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+
+  .toggle-track.light .toggle-thumb { transform: translateX(16px); }
+
+  /* ── Layout ── */
+  .main { display: flex; flex: 1; overflow: hidden; }
+  #map  { flex: 1; position: relative; }
+
+  .sidebar {
+    width: 280px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-shrink: 0;
+    transition: background 0.3s, border-color 0.3s;
+  }
+
+  .sidebar-section {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    transition: border-color 0.3s;
+  }
+
+  .sidebar-section h3 {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.63rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 11px;
+    transition: color 0.3s;
+  }
+
+  /* ── Legend ── */
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 7px;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    transition: background 0.15s;
+  }
+
+  .legend-item:hover { background: var(--hover); }
+  .legend-item.inactive { opacity: 0.35; }
+
+  .legend-color { width: 28px; height: 4px; border-radius: 2px; flex-shrink: 0; }
+  .legend-label { font-size: 0.93rem; color: var(--text); flex: 1; transition: color 0.3s; }
+
+  .legend-count {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.63rem;
+    color: var(--muted);
+    background: var(--stat-bg);
+    padding: 2px 6px;
+    border-radius: 10px;
+    transition: background 0.3s;
+  }
+
+  /* ── Stats ── */
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+  .stat-card {
+    background: var(--stat-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    transition: background 0.3s, border-color 0.3s;
+  }
+
+  .stat-value {
+    font-family: 'Space Mono', monospace;
+    font-size: 1.35rem;
+    color: var(--accent);
+    line-height: 1;
+    transition: color 0.3s;
+  }
+
+  .stat-label { font-size: 0.68rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 1px; }
+
+  /* ── Cache badge ── */
+  .cache-badge {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    color: #3fb950;
+    letter-spacing: 1px;
+    margin-top: 6px;
+  }
+  .cache-badge.visible { display: flex; }
+  .cache-dot { width: 6px; height: 6px; border-radius: 50%; background: #3fb950; }
+
+  /* ── Info panel ── */
+  .info-panel { flex: 1; padding: 16px; overflow-y: auto; }
+
+  .info-panel h3 {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.63rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+
+  .road-info {
+    background: var(--stat-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    display: none;
+    transition: background 0.3s, border-color 0.3s;
+  }
+
+  .road-info.visible { display: block; }
+  .road-info .road-name { font-size: 1.1rem; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+
+  .road-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .road-detail { font-size: 0.85rem; color: var(--muted); line-height: 1.6; }
+  .road-detail strong { color: var(--text); }
+
+  .placeholder-text { font-size: 0.85rem; color: var(--muted); line-height: 1.7; }
+
+  /* ── Search ── */
+  .search-box { display: flex; gap: 6px; margin-bottom: 6px; }
+
+  .search-box input {
+    flex: 1;
+    background: var(--stat-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 7px 10px;
+    color: var(--text);
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.15s, background 0.3s, color 0.3s;
+  }
+
+  .search-box input:focus { border-color: var(--accent); }
+  .search-box input::placeholder { color: var(--muted); }
+
+  .search-box button {
+    background: var(--accent);
+    border: none;
+    border-radius: 4px;
+    padding: 7px 12px;
+    color: #111;
+    cursor: pointer;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.68rem;
+    font-weight: 700;
+    transition: opacity 0.15s;
+  }
+
+  .search-box button:hover { opacity: 0.85; }
+
+  /* ── Loading overlay ── */
+  .loading-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    gap: 14px;
+    backdrop-filter: blur(2px);
+  }
+
+  [data-theme="light"] .loading-overlay { background: rgba(255,255,255,0.55); }
+
+  .loading-spinner {
+    width: 44px; height: 44px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.75s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-text {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--accent);
+    letter-spacing: 2px;
+  }
+
+  /* ── Leaflet popup theming ── */
+  .leaflet-popup-content-wrapper {
+    background: var(--panel) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    color: var(--text) !important;
+    font-family: 'Barlow Condensed', sans-serif !important;
+    box-shadow: var(--shadow) !important;
+  }
+
+  .leaflet-popup-tip { background: var(--panel) !important; }
+  .leaflet-popup-content { font-size: 0.95rem !important; line-height: 1.6 !important; }
+
+  .popup-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 4px; color: var(--text); }
+  .popup-type  { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; }
+  .popup-meta  { margin-top: 4px; font-size: 0.78rem; color: var(--muted); }
+
+  [data-theme="light"] .leaflet-control-attribution {
+    background: rgba(255,255,255,0.85) !important;
+    color: #555 !important;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  @media (max-width: 600px) { .sidebar { display: none; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <h1>WORLD ROADS</h1>
+    <span>Surface Quality Map</span>
+  </div>
+  <div class="header-right">
+    <div class="status-bar">
+      <div class="status-dot"></div>
+      <div class="status-location">
+        <span id="statusRegion" class="status-region">LOCATING…</span>
+        <span id="statusCountry" class="status-country"></span>
+      </div>
+    </div>
+    <div class="theme-toggle" onclick="toggleTheme()" title="Toggle light / dark mode">
+      <span class="theme-label" id="themeLabel">LIGHT</span>
+      <div class="toggle-track light" id="toggleTrack">
+        <div class="toggle-thumb"></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="main">
+  <div id="map">
+    <div class="loading-overlay" id="loadingOverlay" style="display:none">
+      <div class="loading-spinner"></div>
+      <div class="loading-text" id="loadingText">LOADING ROAD DATA…</div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <h3>Search Location</h3>
+      <div class="search-box">
+        <input type="text" id="searchInput" placeholder="e.g. Tokyo, London, New York…"/>
+        <button onclick="searchLocation()">GO</button>
+      </div>
+      <div class="cache-badge" id="searchCacheBadge"><div class="cache-dot"></div>FROM CACHE</div>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Road Surface Types</h3>
+      <div id="legend"></div>
+      <div class="cache-badge" id="roadCacheBadge"><div class="cache-dot"></div>CACHED DATA</div>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Quick Stats</h3>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-value" id="totalRoads">—</div><div class="stat-label">Segments</div></div>
+        <div class="stat-card"><div class="stat-value" id="sealedPct">—</div><div class="stat-label">Sealed %</div></div>
+        <div class="stat-card"><div class="stat-value" id="unsealedCount">—</div><div class="stat-label">Unsealed</div></div>
+        <div class="stat-card"><div class="stat-value" id="highwayCount">—</div><div class="stat-label">Highways</div></div>
+      </div>
+    </div>
+
+    <div class="info-panel">
+      <h3>Selected Road</h3>
+      <div class="road-info" id="roadInfo"></div>
+      <div class="placeholder-text" id="placeholderText">
+        Zoom in to level 11+ anywhere in the world to load road surface data. Click any road for details.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════
+// CACHE — two-layer: in-memory + localStorage
+// ═══════════════════════════════════════════
+const memCache   = new Map();
+const LS_PREFIX  = 'world-roads:';
+const ROAD_TTL   = 15 * 60 * 1000;  // 15 min
+const SEARCH_TTL = 60 * 60 * 1000;  // 60 min
+
+function cacheGet(key) {
+  // Layer 1: memory (fastest, zero parse cost)
+  if (memCache.has(key)) {
+    const entry = memCache.get(key);
+    if (Date.now() < entry.expires) return { data: entry.data, hit: true };
+    memCache.delete(key);
+  }
+  // Layer 2: localStorage (survives page reload)
+  try {
+    const raw = localStorage.getItem(LS_PREFIX + key);
+    if (raw) {
+      const entry = JSON.parse(raw);
+      if (Date.now() < entry.expires) {
+        memCache.set(key, entry); // promote to memory
+        return { data: entry.data, hit: true };
+      }
+      localStorage.removeItem(LS_PREFIX + key);
+    }
+  } catch (_) {}
+  return { data: null, hit: false };
+}
+
+function cacheSet(key, data, ttl) {
+  const entry = { data, expires: Date.now() + ttl };
+  memCache.set(key, entry);
+  try {
+    localStorage.setItem(LS_PREFIX + key, JSON.stringify(entry));
+  } catch (_) {
+    // Quota exceeded — evict oldest VIC-roads entries and retry once
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(LS_PREFIX)) keys.push(k);
+      }
+      keys.slice(0, Math.ceil(keys.length / 2)).forEach(k => localStorage.removeItem(k));
+      localStorage.setItem(LS_PREFIX + key, JSON.stringify(entry));
+    } catch (_2) {}
+  }
+}
+
+async function cachedFetch(cacheKey, url, ttl, fetchOpts = {}) {
+  const { data, hit } = cacheGet(cacheKey);
+  if (hit) return { data, fromCache: true };
+  const resp = await fetch(url, fetchOpts);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const json = await resp.json();
+  cacheSet(cacheKey, json, ttl);
+  return { data: json, fromCache: false };
+}
+
+// ═══════════════════════════════════════════
+// THEME
+// ═══════════════════════════════════════════
+let isDark = false;
+let tileLayer;
+
+const TILES = {
+  dark:  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+};
+
+function applyTile() {
+  if (tileLayer) map.removeLayer(tileLayer);
+  tileLayer = L.tileLayer(isDark ? TILES.dark : TILES.light, {
+    attribution: '© OpenStreetMap contributors © CARTO',
+    subdomains: 'abcd',
+    maxZoom: 19,
+  }).addTo(map);
+}
+
+function toggleTheme() {
+  isDark = !isDark;
+  const theme = isDark ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', theme);
+  document.getElementById('themeLabel').textContent = isDark ? 'DARK' : 'LIGHT';
+  const track = document.getElementById('toggleTrack');
+  isDark ? track.classList.remove('light') : track.classList.add('light');
+  applyTile();
+  try { localStorage.setItem('world-roads-theme', theme); } catch (_) {}
+}
+
+// ═══════════════════════════════════════════
+// ROAD TYPE CONFIG
+// ═══════════════════════════════════════════
+const ROAD_TYPES = {
+  highway:  { label: 'Freeway / Highway',  color: '#e05c5c', weight: 5,   opacity: 0.9,  desc: 'Divided carriageway, fully sealed bitumen. High-speed, controlled access.' },
+  arterial: { label: 'Arterial Road',       color: '#e08c00', weight: 3.5, opacity: 0.85, desc: 'Sealed asphalt or concrete. Major connector between suburbs and towns.' },
+  local:    { label: 'Local Street',        color: '#2ea44f', weight: 2,   opacity: 0.75, desc: 'Sealed bitumen. Low-speed neighbourhood access road.' },
+  gravel:   { label: 'Gravel Road',         color: '#c4894a', weight: 2.5, opacity: 0.9,  desc: 'Compacted gravel. Common in rural areas worldwide. Can become corrugated.' },
+  dirt:     { label: 'Dirt / Unsealed',     color: '#a05a10', weight: 2,   opacity: 0.85, desc: 'Natural earth surface. Impassable in wet conditions. 4WD recommended.' },
+  track:    { label: 'Track / Fire Road',   color: '#7d5230', weight: 1.5, opacity: 0.8,  desc: 'Unsealed 4WD track. Forestry/fire access. May be rough.' },
+  path:     { label: 'Path / Service Road', color: '#888888', weight: 1,   opacity: 0.6,  desc: 'Service lane or shared path. Sealed or paved.' },
+};
+
+// ═══════════════════════════════════════════
+// MAP INIT
+// ═══════════════════════════════════════════
+const map = L.map('map', { center: [-37.0, 144.5], zoom: 9, zoomControl: true });
+applyTile();
+
+// Restore saved theme
+try {
+  if (localStorage.getItem('world-roads-theme') === 'dark') toggleTheme();
+} catch (_) {}
+
+let roadLayer     = L.layerGroup().addTo(map);
+let activeFilters = new Set(Object.keys(ROAD_TYPES));
+let roadCounts    = {};
+let allRoads      = [];
+let loadTimeout;
+
+// ═══════════════════════════════════════════
+// LEGEND
+// ═══════════════════════════════════════════
+function renderLegend() {
+  const el = document.getElementById('legend');
+  el.innerHTML = '';
+  Object.entries(ROAD_TYPES).forEach(([key, cfg]) => {
+    const div = document.createElement('div');
+    div.className = 'legend-item' + (activeFilters.has(key) ? '' : ' inactive');
+    div.innerHTML = `
+      <div class="legend-color" style="background:${cfg.color}"></div>
+      <span class="legend-label">${cfg.label}</span>
+      <span class="legend-count">${roadCounts[key] || 0}</span>`;
+    div.onclick = () => {
+      activeFilters.has(key) ? activeFilters.delete(key) : activeFilters.add(key);
+      div.classList.toggle('inactive');
+      renderRoads();
+    };
+    el.appendChild(div);
+  });
+}
+
+// ═══════════════════════════════════════════
+// ROAD RENDERING
+// ═══════════════════════════════════════════
+function getRoadType(tags) {
+  const hw      = tags.highway || '';
+  const surface = (tags.surface || '').toLowerCase();
+  if (['gravel','compacted','fine_gravel','pebblestone'].includes(surface)) return 'gravel';
+  if (['dirt','earth','mud','unpaved','sand','ground'].includes(surface))   return 'dirt';
+  if (hw === 'motorway' || hw === 'trunk')                                  return 'highway';
+  if (hw === 'primary'  || hw === 'secondary')                              return 'arterial';
+  if (['residential','tertiary','unclassified','living_street'].includes(hw)) return 'local';
+  if (hw === 'track')                                                        return 'track';
+  if (hw === 'service')                                                      return 'path';
+  return 'local';
+}
+
+function renderRoads() {
+  roadLayer.clearLayers();
+  allRoads.forEach(({ type, latlngs, tags, name }) => {
+    if (!activeFilters.has(type)) return;
+    const cfg  = ROAD_TYPES[type];
+    const line = L.polyline(latlngs, { color: cfg.color, weight: cfg.weight, opacity: cfg.opacity });
+    line.on('click',     () => showRoadInfo(name, type, tags));
+    line.on('mouseover', function() { this.setStyle({ weight: cfg.weight + 2, opacity: 1 }); });
+    line.on('mouseout',  function() { this.setStyle({ weight: cfg.weight, opacity: cfg.opacity }); });
+    const displayName = name || tags.ref || 'Unnamed Road';
+    line.bindPopup(`
+      <div class="popup-title">${displayName}</div>
+      <div class="popup-type" style="color:${cfg.color}">${cfg.label}</div>
+      ${tags.surface  ? `<div class="popup-meta">Surface: ${tags.surface}</div>` : ''}
+      ${tags.maxspeed ? `<div class="popup-meta">Speed: ${tags.maxspeed} km/h</div>` : ''}
+    `, { maxWidth: 220 });
+    roadLayer.addLayer(line);
+  });
+}
+
+function showRoadInfo(name, type, tags) {
+  const cfg         = ROAD_TYPES[type];
+  const el          = document.getElementById('roadInfo');
+  const ph          = document.getElementById('placeholderText');
+  const displayName = name || tags.ref || 'Unnamed Road';
+  const surface     = tags.surface || (type === 'gravel' ? 'Gravel' : type === 'dirt' ? 'Dirt/Earth' : 'Sealed');
+  el.innerHTML = `
+    <div class="road-name">${displayName}</div>
+    <div class="road-badge" style="background:${cfg.color}22;color:${cfg.color};border:1px solid ${cfg.color}55">${cfg.label}</div>
+    <div class="road-detail">
+      ${cfg.desc}<br><br>
+      <strong>Surface:</strong> ${surface}<br>
+      <strong>Lanes:</strong> ${tags.lanes ? tags.lanes + ' lanes' : 'Unknown'}<br>
+      <strong>Speed limit:</strong> ${tags.maxspeed ? tags.maxspeed + ' km/h' : 'Not specified'}<br>
+      <strong>Lighting:</strong> ${tags.lit === 'yes' ? 'Yes' : tags.lit === 'no' ? 'No' : 'Unknown'}<br>
+      ${tags.ref     ? `<strong>Route ref:</strong> ${tags.ref}<br>` : ''}
+      ${tags.oneway === 'yes' ? '<strong>One-way</strong><br>' : ''}
+    </div>`;
+  el.classList.add('visible');
+  ph.style.display = 'none';
+}
+
+// ═══════════════════════════════════════════
+// STATS
+// ═══════════════════════════════════════════
+function updateStats() {
+  const total    = allRoads.length;
+  const sealed   = allRoads.filter(r => ['highway','arterial','local','path'].includes(r.type)).length;
+  const unsealed = allRoads.filter(r => ['gravel','dirt','track'].includes(r.type)).length;
+  document.getElementById('totalRoads').textContent    = total > 999 ? (total/1000).toFixed(1)+'k' : total || '—';
+  document.getElementById('sealedPct').textContent     = total ? Math.round(sealed/total*100)+'%' : '—';
+  document.getElementById('unsealedCount').textContent = unsealed || '—';
+  document.getElementById('highwayCount').textContent  = roadCounts['highway'] || '—';
+}
+
+// ═══════════════════════════════════════════
+// ZOOM MESSAGE
+// ═══════════════════════════════════════════
+let zoomMsgEl;
+
+function showZoomMessage() {
+  if (zoomMsgEl) return;
+  zoomMsgEl = L.control({ position: 'topright' });
+  zoomMsgEl.onAdd = () => {
+    const d = L.DomUtil.create('div');
+    d.style.cssText = 'background:var(--panel);border:1.5px solid var(--accent);color:var(--accent);padding:9px 15px;font-family:Space Mono,monospace;font-size:0.68rem;letter-spacing:2px;border-radius:4px;margin-top:8px;box-shadow:0 2px 10px rgba(0,0,0,0.2);';
+    d.textContent = 'ZOOM IN TO LOAD ROAD DATA';
+    return d;
+  };
+  zoomMsgEl.addTo(map);
+}
+
+function removeZoomMessage() {
+  if (zoomMsgEl) { zoomMsgEl.remove(); zoomMsgEl = null; }
+}
+
+// ═══════════════════════════════════════════
+// LOAD ROADS (cached)
+// ═══════════════════════════════════════════
+function buildQuery(bounds) {
+  // Snap to 2 d.p. → wider cache reuse across minor pans
+  const snap = n => (Math.floor(n * 100) / 100).toFixed(2);
+  const b = `${snap(bounds.getSouth())},${snap(bounds.getWest())},${snap(bounds.getNorth())},${snap(bounds.getEast())}`;
+  return {
+    key: `roads:${b}`,
+    url: `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(
+      `[out:json][timeout:25];(way["highway"~"motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|track|service"](${b}););out geom qt;`
+    )}`,
+  };
+}
+
+async function loadRoads() {
+  const bounds = map.getBounds();
+  document.getElementById('roadCacheBadge').classList.remove('visible');
+
+  if (map.getZoom() < 11) {
+    document.getElementById('loadingOverlay').style.display = 'none';
+    roadLayer.clearLayers();
+    allRoads = [];
+    renderLegend();
+    updateStats();
+    showZoomMessage();
+    return;
+  }
+
+  removeZoomMessage();
+  document.getElementById('loadingOverlay').style.display = 'flex';
+
+  const { key, url } = buildQuery(bounds);
+
+  try {
+    const { data, fromCache } = await cachedFetch(key, url, ROAD_TTL);
+
+    allRoads   = [];
+    roadCounts = {};
+    Object.keys(ROAD_TYPES).forEach(k => roadCounts[k] = 0);
+
+    (data.elements || data).forEach(el => {
+      if (el.type !== 'way' || !el.geometry) return;
+      const latlngs = el.geometry.map(p => [p.lat, p.lon]);
+      const type    = getRoadType(el.tags || {});
+      allRoads.push({ type, latlngs, tags: el.tags || {}, name: (el.tags || {}).name || '' });
+      roadCounts[type] = (roadCounts[type] || 0) + 1;
+    });
+
+    renderRoads();
+    renderLegend();
+    updateStats();
+
+    if (fromCache) document.getElementById('roadCacheBadge').classList.add('visible');
+  } catch(e) {
+    console.error('Road load failed:', e);
+    document.getElementById('loadingText').textContent = 'LOAD FAILED — TRY AGAIN';
+  }
+
+  document.getElementById('loadingOverlay').style.display = 'none';
+}
+
+// ═══════════════════════════════════════════
+// REVERSE GEOCODE — update status bar location
+// ═══════════════════════════════════════════
+const GEO_TTL = 30 * 60 * 1000; // 30 min
+let geoTimeout;
+
+async function updateLocationLabel() {
+  const center = map.getCenter();
+  // Snap to 2 d.p. for cache reuse
+  const lat = Math.round(center.lat * 100) / 100;
+  const lng = Math.round(center.lng * 100) / 100;
+  const cacheKey = `geo:${lat},${lng}`;
+  const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=10&accept-language=en`;
+
+  const regionEl  = document.getElementById('statusRegion');
+  const countryEl = document.getElementById('statusCountry');
+
+  try {
+    const { data } = await cachedFetch(cacheKey, url, GEO_TTL, { headers: { 'Accept-Language': 'en' } });
+    const addr = data.address || {};
+
+    // Build region string: state/county/city, falling through available fields
+    const region = addr.state || addr.county || addr.city || addr.town || addr.village || addr.region || '';
+    const country = addr.country || '';
+    const countryCode = (addr.country_code || '').toUpperCase();
+
+    regionEl.textContent  = region ? region.toUpperCase() : (country.toUpperCase() || 'UNKNOWN REGION');
+    countryEl.textContent = country ? `${country}${countryCode ? '  ·  ' + countryCode : ''}` : '';
+  } catch(e) {
+    regionEl.textContent  = 'LIVE DATA';
+    countryEl.textContent = '';
+  }
+}
+
+function scheduleGeoUpdate() {
+  clearTimeout(geoTimeout);
+  geoTimeout = setTimeout(updateLocationLabel, 1200);
+}
+
+// ═══════════════════════════════════════════
+// SEARCH (cached, global)
+// ═══════════════════════════════════════════
+async function searchLocation() {
+  const q = document.getElementById('searchInput').value.trim();
+  if (!q) return;
+  const badge    = document.getElementById('searchCacheBadge');
+  badge.classList.remove('visible');
+  const encoded  = encodeURIComponent(q);
+  const url      = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1`;
+  const cacheKey = `search:${q.toLowerCase()}`;
+  try {
+    const { data, fromCache } = await cachedFetch(cacheKey, url, SEARCH_TTL, { headers: { 'Accept-Language': 'en' } });
+    if (data[0]) {
+      map.setView([parseFloat(data[0].lat), parseFloat(data[0].lon)], 13);
+      if (fromCache) badge.classList.add('visible');
+    }
+  } catch(e) { console.error('Search failed:', e); }
+}
+
+document.getElementById('searchInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') searchLocation();
+});
+
+// ═══════════════════════════════════════════
+// MAP EVENTS
+// ═══════════════════════════════════════════
+function scheduleLoad() {
+  clearTimeout(loadTimeout);
+  loadTimeout = setTimeout(loadRoads, 800);
+}
+
+map.on('moveend', scheduleLoad);
+map.on('zoomend', scheduleLoad);
+map.on('moveend', scheduleGeoUpdate);
+
+// Init
+renderLegend();
+showZoomMessage();
+updateLocationLabel();
+</script>
+</body>
+</html>

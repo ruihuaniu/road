@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VIC Road Quality Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Barlow+Condensed:wght@300;400;600;700&display=swap');
+
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --accent: #f0c040;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --sealed: #4fc3f7;
+    --gravel: #d4a574;
+    --dirt: #8b6914;
+    --highway: #ff6b6b;
+    --arterial: #ffa500;
+    --local: #90ee90;
+    --track: #cd853f;
+    --unknown: #666;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Barlow Condensed', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  header {
+    background: var(--panel);
+    border-bottom: 2px solid var(--accent);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 1000;
+    flex-shrink: 0;
+  }
+
+  .logo {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .logo h1 {
+    font-family: 'Space Mono', monospace;
+    font-size: 1.3rem;
+    color: var(--accent);
+    letter-spacing: -1px;
+  }
+
+  .logo span {
+    font-size: 0.85rem;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--muted);
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #3fb950;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  #map {
+    flex: 1;
+    position: relative;
+  }
+
+  .sidebar {
+    width: 280px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .sidebar-section {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-section h3 {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    transition: background 0.15s;
+  }
+
+  .legend-item:hover { background: rgba(255,255,255,0.05); }
+
+  .legend-item.inactive { opacity: 0.35; }
+
+  .legend-color {
+    width: 28px; height: 4px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  .legend-label {
+    font-size: 0.95rem;
+    color: var(--text);
+    flex: 1;
+  }
+
+  .legend-count {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--muted);
+    background: var(--bg);
+    padding: 2px 6px;
+    border-radius: 10px;
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .stat-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+  }
+
+  .stat-value {
+    font-family: 'Space Mono', monospace;
+    font-size: 1.4rem;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .stat-label {
+    font-size: 0.7rem;
+    color: var(--muted);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .info-panel {
+    flex: 1;
+    padding: 16px;
+    overflow-y: auto;
+  }
+
+  .info-panel h3 {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+
+  .road-info {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    display: none;
+  }
+
+  .road-info.visible { display: block; }
+
+  .road-info .road-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+
+  .road-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .road-detail {
+    font-size: 0.85rem;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  .road-detail strong { color: var(--text); }
+
+  .placeholder-text {
+    font-size: 0.85rem;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+
+  /* Search */
+  .search-box {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .search-box input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 7px 10px;
+    color: var(--text);
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .search-box input:focus { border-color: var(--accent); }
+
+  .search-box button {
+    background: var(--accent);
+    border: none;
+    border-radius: 4px;
+    padding: 7px 12px;
+    color: var(--bg);
+    cursor: pointer;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+  }
+
+  .filter-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .filter-btn {
+    padding: 3px 10px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .filter-btn.active {
+    color: var(--bg);
+    border-color: transparent;
+  }
+
+  .loading-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(13,17,23,0.85);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    gap: 16px;
+  }
+
+  .loading-spinner {
+    width: 48px; height: 48px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-text {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--accent);
+    letter-spacing: 2px;
+  }
+
+  .leaflet-popup-content-wrapper {
+    background: var(--panel) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    color: var(--text) !important;
+    font-family: 'Barlow Condensed', sans-serif !important;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5) !important;
+  }
+
+  .leaflet-popup-tip { background: var(--panel) !important; }
+
+  .leaflet-popup-content { font-size: 0.95rem !important; line-height: 1.6 !important; }
+
+  .popup-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 4px; }
+  .popup-type { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  @media (max-width: 600px) {
+    .sidebar { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <h1>VIC ROADS</h1>
+    <span>Surface Quality Map</span>
+  </div>
+  <div class="status-bar">
+    <div class="status-dot"></div>
+    <span>LIVE DATA — VICTORIA, AU</span>
+  </div>
+</header>
+
+<div class="main">
+  <div id="map">
+    <div class="loading-overlay" id="loadingOverlay">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">LOADING ROAD DATA...</div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <h3>Search Location</h3>
+      <div class="search-box">
+        <input type="text" id="searchInput" placeholder="e.g. Ballarat, Bendigo..." />
+        <button onclick="searchLocation()">GO</button>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Road Surface Types</h3>
+      <div id="legend"></div>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Quick Stats</h3>
+      <div class="stats-grid" id="statsGrid">
+        <div class="stat-card">
+          <div class="stat-value" id="totalRoads">—</div>
+          <div class="stat-label">Segments</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="sealedPct">—</div>
+          <div class="stat-label">Sealed %</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="unsealedCount">—</div>
+          <div class="stat-label">Unsealed</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="highwayCount">—</div>
+          <div class="stat-label">Highways</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="info-panel">
+      <h3>Selected Road</h3>
+      <div class="road-info" id="roadInfo"></div>
+      <div class="placeholder-text" id="placeholderText">
+        Click any road on the map to view detailed surface information, road classification, and maintenance status.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Road surface type config
+const ROAD_TYPES = {
+  highway: {
+    label: 'Freeway / Highway',
+    color: '#ff6b6b',
+    weight: 5,
+    opacity: 0.9,
+    tags: ['motorway', 'trunk'],
+    desc: 'Divided carriageway, fully sealed bitumen surface. High-speed, controlled access.'
+  },
+  arterial: {
+    label: 'Arterial Road',
+    color: '#ffa500',
+    weight: 3.5,
+    opacity: 0.85,
+    tags: ['primary', 'secondary'],
+    desc: 'Sealed asphalt or concrete. Major connector between suburbs and towns.'
+  },
+  local: {
+    label: 'Local Street',
+    color: '#90ee90',
+    weight: 2,
+    opacity: 0.75,
+    tags: ['residential', 'tertiary', 'unclassified', 'living_street'],
+    desc: 'Sealed bitumen surface. Low speed, neighbourhood access road.'
+  },
+  gravel: {
+    label: 'Gravel Road',
+    color: '#d4a574',
+    weight: 2.5,
+    opacity: 0.9,
+    tags: ['gravel'],
+    surface: 'gravel',
+    desc: 'Compacted gravel surface. Common in rural and semi-rural Victoria. Can become corrugated.'
+  },
+  dirt: {
+    label: 'Dirt / Unsealed',
+    color: '#c67c2a',
+    weight: 2,
+    opacity: 0.85,
+    tags: ['dirt', 'earth', 'unpaved', 'mud'],
+    surface: 'dirt',
+    desc: 'Natural earth surface. Impassable in wet conditions. 4WD recommended.'
+  },
+  track: {
+    label: 'Track / Fire Road',
+    color: '#cd853f',
+    weight: 1.5,
+    opacity: 0.8,
+    tags: ['track'],
+    desc: 'Unsealed 4WD track. Used for forestry and fire access. May be rough.'
+  },
+  path: {
+    label: 'Path / Service Road',
+    color: '#aaa',
+    weight: 1,
+    opacity: 0.6,
+    tags: ['service', 'footway', 'cycleway'],
+    desc: 'Service lane or shared path. Sealed or paved.'
+  }
+};
+
+// Overpass API query for Victoria road data
+function buildOverpassQuery(bounds) {
+  const b = `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
+  return `
+    [out:json][timeout:25];
+    (
+      way["highway"~"motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|track|service"](${b});
+    );
+    out geom qt;
+  `;
+}
+
+function getRoadType(tags) {
+  const hw = tags.highway || '';
+  const surface = (tags.surface || '').toLowerCase();
+
+  // Surface overrides
+  if (['gravel', 'compacted', 'fine_gravel'].includes(surface)) return 'gravel';
+  if (['dirt', 'earth', 'mud', 'unpaved', 'sand'].includes(surface)) return 'dirt';
+
+  if (hw === 'motorway' || hw === 'trunk') return 'highway';
+  if (hw === 'primary' || hw === 'secondary') return 'arterial';
+  if (['residential', 'tertiary', 'unclassified', 'living_street'].includes(hw)) return 'local';
+  if (hw === 'track') return 'track';
+  if (hw === 'service') return 'path';
+
+  return 'local';
+}
+
+// Init map centered on Victoria
+const map = L.map('map', {
+  center: [-37.0, 144.5],
+  zoom: 9,
+  zoomControl: true,
+});
+
+// Dark tile layer
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '© OpenStreetMap contributors © CARTO',
+  subdomains: 'abcd',
+  maxZoom: 19
+}).addTo(map);
+
+let roadLayer = L.layerGroup().addTo(map);
+let activeFilters = new Set(Object.keys(ROAD_TYPES));
+let roadCounts = {};
+let allRoads = [];
+let loadTimeout;
+
+// Render legend
+function renderLegend() {
+  const el = document.getElementById('legend');
+  el.innerHTML = '';
+  Object.entries(ROAD_TYPES).forEach(([key, cfg]) => {
+    const div = document.createElement('div');
+    div.className = 'legend-item' + (activeFilters.has(key) ? '' : ' inactive');
+    div.innerHTML = `
+      <div class="legend-color" style="background:${cfg.color}"></div>
+      <span class="legend-label">${cfg.label}</span>
+      <span class="legend-count">${roadCounts[key] || 0}</span>
+    `;
+    div.onclick = () => toggleFilter(key, div);
+    el.appendChild(div);
+  });
+}
+
+function toggleFilter(key, el) {
+  if (activeFilters.has(key)) {
+    activeFilters.delete(key);
+    el.classList.add('inactive');
+  } else {
+    activeFilters.add(key);
+    el.classList.remove('inactive');
+  }
+  renderRoads();
+}
+
+function renderRoads() {
+  roadLayer.clearLayers();
+  let shown = 0;
+  allRoads.forEach(({ type, latlngs, tags, name }) => {
+    if (!activeFilters.has(type)) return;
+    shown++;
+    const cfg = ROAD_TYPES[type];
+    const line = L.polyline(latlngs, {
+      color: cfg.color,
+      weight: cfg.weight,
+      opacity: cfg.opacity,
+    });
+    line.on('click', () => showRoadInfo(name, type, tags));
+    line.on('mouseover', function() { this.setStyle({ weight: cfg.weight + 2, opacity: 1 }); });
+    line.on('mouseout', function() { this.setStyle({ weight: cfg.weight, opacity: cfg.opacity }); });
+    const displayName = name || tags.ref || 'Unnamed Road';
+    line.bindPopup(`
+      <div class="popup-title">${displayName}</div>
+      <div class="popup-type" style="color:${cfg.color}">${cfg.label}</div>
+      ${tags.surface ? `<div style="margin-top:4px;font-size:0.8rem;color:#8b949e">Surface: ${tags.surface}</div>` : ''}
+      ${tags.maxspeed ? `<div style="font-size:0.8rem;color:#8b949e">Speed: ${tags.maxspeed} km/h</div>` : ''}
+    `, { maxWidth: 220 });
+    roadLayer.addLayer(line);
+  });
+}
+
+function showRoadInfo(name, type, tags) {
+  const cfg = ROAD_TYPES[type];
+  const el = document.getElementById('roadInfo');
+  const ph = document.getElementById('placeholderText');
+  const displayName = name || tags.ref || 'Unnamed Road';
+  const surface = tags.surface || (type === 'gravel' ? 'Gravel' : type === 'dirt' ? 'Dirt/Earth' : type === 'highway' ? 'Sealed Bitumen' : 'Sealed');
+  const lanes = tags.lanes ? `${tags.lanes} lanes` : 'Unknown';
+  const speed = tags.maxspeed ? `${tags.maxspeed} km/h` : 'Not specified';
+  const lit = tags.lit === 'yes' ? 'Yes' : tags.lit === 'no' ? 'No' : 'Unknown';
+
+  el.innerHTML = `
+    <div class="road-name">${displayName}</div>
+    <div class="road-badge" style="background:${cfg.color}22;color:${cfg.color};border:1px solid ${cfg.color}55">
+      ${cfg.label}
+    </div>
+    <div class="road-detail">
+      ${cfg.desc}
+      <br><br>
+      <strong>Surface:</strong> ${surface}<br>
+      <strong>Lanes:</strong> ${lanes}<br>
+      <strong>Speed limit:</strong> ${speed}<br>
+      <strong>Lighting:</strong> ${lit}<br>
+      ${tags.ref ? `<strong>Route ref:</strong> ${tags.ref}<br>` : ''}
+      ${tags.oneway === 'yes' ? '<strong>One-way</strong><br>' : ''}
+    </div>
+  `;
+  el.classList.add('visible');
+  ph.style.display = 'none';
+}
+
+async function loadRoads() {
+  const bounds = map.getBounds();
+  // Don't load if zoomed too far out (performance)
+  if (map.getZoom() < 11) {
+    document.getElementById('loadingOverlay').style.display = 'none';
+    roadLayer.clearLayers();
+    allRoads = [];
+    renderLegend();
+    updateStats();
+    showZoomMessage();
+    return;
+  }
+
+  document.getElementById('loadingOverlay').style.display = 'flex';
+  removeZoomMessage();
+
+  const query = buildOverpassQuery(bounds);
+  const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+
+  try {
+    const resp = await fetch(url);
+    const data = await resp.json();
+
+    allRoads = [];
+    roadCounts = {};
+    Object.keys(ROAD_TYPES).forEach(k => roadCounts[k] = 0);
+
+    data.elements.forEach(el => {
+      if (el.type !== 'way' || !el.geometry) return;
+      const latlngs = el.geometry.map(p => [p.lat, p.lon]);
+      const type = getRoadType(el.tags || {});
+      const name = (el.tags || {}).name || '';
+      allRoads.push({ type, latlngs, tags: el.tags || {}, name });
+      roadCounts[type] = (roadCounts[type] || 0) + 1;
+    });
+
+    renderRoads();
+    renderLegend();
+    updateStats();
+  } catch (e) {
+    console.error('Failed to load road data:', e);
+  }
+
+  document.getElementById('loadingOverlay').style.display = 'none';
+}
+
+function updateStats() {
+  const total = allRoads.length;
+  const sealed = allRoads.filter(r => ['highway','arterial','local','path'].includes(r.type)).length;
+  const unsealed = allRoads.filter(r => ['gravel','dirt','track'].includes(r.type)).length;
+  const highways = roadCounts['highway'] || 0;
+
+  document.getElementById('totalRoads').textContent = total > 999 ? (total/1000).toFixed(1)+'k' : total || '—';
+  document.getElementById('sealedPct').textContent = total ? Math.round(sealed/total*100)+'%' : '—';
+  document.getElementById('unsealedCount').textContent = unsealed || '—';
+  document.getElementById('highwayCount').textContent = highways || '—';
+}
+
+let zoomMsgEl;
+function showZoomMessage() {
+  if (zoomMsgEl) return;
+  zoomMsgEl = L.control({ position: 'topright' });
+  zoomMsgEl.onAdd = () => {
+    const d = L.DomUtil.create('div');
+    d.style.cssText = 'background:#161b22;border:1px solid #f0c040;color:#f0c040;padding:10px 16px;font-family:Space Mono,monospace;font-size:0.7rem;letter-spacing:2px;border-radius:4px;margin-top:8px;';
+    d.textContent = 'ZOOM IN TO LOAD ROAD DATA';
+    return d;
+  };
+  zoomMsgEl.addTo(map);
+}
+
+function removeZoomMessage() {
+  if (zoomMsgEl) { zoomMsgEl.remove(); zoomMsgEl = null; }
+}
+
+// Debounced load on move
+function scheduleLoad() {
+  clearTimeout(loadTimeout);
+  loadTimeout = setTimeout(loadRoads, 800);
+}
+
+map.on('moveend', scheduleLoad);
+map.on('zoomend', scheduleLoad);
+
+// Search
+async function searchLocation() {
+  const q = document.getElementById('searchInput').value.trim();
+  if (!q) return;
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q + ', Victoria, Australia')}&format=json&limit=1`;
+  try {
+    const resp = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+    const data = await resp.json();
+    if (data[0]) {
+      map.setView([parseFloat(data[0].lat), parseFloat(data[0].lon)], 13);
+    }
+  } catch(e) { console.error(e); }
+}
+
+document.getElementById('searchInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') searchLocation();
+});
+
+// Initial load
+renderLegend();
+showZoomMessage();
+document.getElementById('loadingOverlay').style.display = 'none';
+
+// Show message to zoom
+setTimeout(() => {
+  const d = document.getElementById('placeholderText');
+  d.textContent = 'Zoom in to level 11+ on any area of Victoria to load road surface data. Click any road for details.';
+}, 100);
+</script>
+</body>
+</html>
