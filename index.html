@@ -4,8 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>World Road Quality Map</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.vectorgrid@1.3.0/dist/Leaflet.VectorGrid.bundled.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Barlow+Condensed:wght@300;400;600;700&display=swap');
 
@@ -175,6 +176,23 @@
   .main { display: flex; flex: 1; overflow: hidden; }
   #map  { flex: 1; position: relative; }
 
+  .map-message {
+    position: absolute;
+    z-index: 1500;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    max-width: min(440px, calc(100% - 32px));
+    padding: 14px 18px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--text);
+    font: 0.9rem/1.5 'Space Mono', monospace;
+    text-align: center;
+    box-shadow: var(--shadow);
+  }
+
   .sidebar {
     width: 280px;
     background: var(--panel);
@@ -343,22 +361,27 @@
   /* ── Loading overlay ── */
   .loading-overlay {
     position: absolute;
-    inset: 0;
-    background: rgba(0,0,0,0.5);
+    inset: auto auto 12px 12px;
+    width: max-content;
+    max-width: calc(100% - 24px);
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
     justify-content: center;
     z-index: 2000;
-    gap: 14px;
-    backdrop-filter: blur(2px);
+    gap: 8px;
+    box-shadow: var(--shadow);
+    pointer-events: none;
   }
 
-  [data-theme="light"] .loading-overlay { background: rgba(255,255,255,0.55); }
-
   .loading-spinner {
-    width: 44px; height: 44px;
-    border: 3px solid var(--border);
+    width: 16px; height: 16px;
+    flex: 0 0 16px;
+    border: 2px solid var(--border);
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.75s linear infinite;
@@ -368,9 +391,9 @@
 
   .loading-text {
     font-family: 'Space Mono', monospace;
-    font-size: 0.72rem;
+    font-size: 0.6rem;
     color: var(--accent);
-    letter-spacing: 2px;
+    letter-spacing: 1px;
   }
 
   /* ── Leaflet popup theming ── */
@@ -448,7 +471,7 @@
     <div class="sidebar-section">
       <h3>Road Surface Types</h3>
       <div id="legend"></div>
-      <div class="cache-badge" id="roadCacheBadge"><div class="cache-dot"></div>CACHED DATA</div>
+      <div class="cache-badge" id="roadCacheBadge"><div class="cache-dot"></div><span id="roadCacheLabel">CACHED DATA</span></div>
     </div>
 
     <div class="sidebar-section">
@@ -456,7 +479,7 @@
       <div class="stats-grid">
         <div class="stat-card"><div class="stat-value" id="totalRoads">—</div><div class="stat-label">Segments</div></div>
         <div class="stat-card"><div class="stat-value" id="sealedPct">—</div><div class="stat-label">Sealed %</div></div>
-        <div class="stat-card"><div class="stat-value" id="unsealedCount">—</div><div class="stat-label">Unsealed</div></div>
+        <div class="stat-card"><div class="stat-value" id="unsealedCount">—</div><div class="stat-label">Unpaved</div></div>
         <div class="stat-card"><div class="stat-value" id="highwayCount">—</div><div class="stat-label">Highways</div></div>
       </div>
     </div>
@@ -465,26 +488,43 @@
       <h3>Selected Road</h3>
       <div class="road-info" id="roadInfo"></div>
       <div class="placeholder-text" id="placeholderText">
-        Zoom in to level 11+ anywhere in the world to load road surface data. Click any road for details.
+        Main paved road classes load at the default zoom. Zoom in to level 11 for local roads and surface detail.
       </div>
     </div>
   </div>
 </div>
 
 <script>
+if (!window.L) {
+  const mapElement = document.getElementById('map');
+  mapElement.innerHTML = '<div class="map-message" role="alert">The map library could not be loaded. Check your connection and reload the page.</div>';
+  throw new Error('Leaflet failed to load; map initialization stopped.');
+}
+
 // ═══════════════════════════════════════════
 // CACHE — two-layer: in-memory + localStorage
 // ═══════════════════════════════════════════
 const memCache   = new Map();
 const LS_PREFIX  = 'world-roads:';
 const ROAD_TTL   = 15 * 60 * 1000;  // 15 min
+const ROAD_STALE_TTL = 7 * 24 * 60 * 60 * 1000; // keep the last good response for one week
 const SEARCH_TTL = 60 * 60 * 1000;  // 60 min
 
-function cacheGet(key) {
+function cacheGet(key, { allowStaleFor = 0 } = {}) {
+  const now = Date.now();
+  const readEntry = entry => {
+    if (now < entry.expires) return { data: entry.data, hit: true, stale: false };
+    if (allowStaleFor && now < entry.expires + allowStaleFor) {
+      return { data: entry.data, hit: false, stale: true };
+    }
+    return null;
+  };
+
   // Layer 1: memory (fastest, zero parse cost)
   if (memCache.has(key)) {
     const entry = memCache.get(key);
-    if (Date.now() < entry.expires) return { data: entry.data, hit: true };
+    const cached = readEntry(entry);
+    if (cached) return cached;
     memCache.delete(key);
   }
   // Layer 2: localStorage (survives page reload)
@@ -492,9 +532,10 @@ function cacheGet(key) {
     const raw = localStorage.getItem(LS_PREFIX + key);
     if (raw) {
       const entry = JSON.parse(raw);
-      if (Date.now() < entry.expires) {
+      const cached = readEntry(entry);
+      if (cached) {
         memCache.set(key, entry); // promote to memory
-        return { data: entry.data, hit: true };
+        return cached;
       }
       localStorage.removeItem(LS_PREFIX + key);
     }
@@ -505,20 +546,24 @@ function cacheGet(key) {
 function cacheSet(key, data, ttl) {
   const entry = { data, expires: Date.now() + ttl };
   memCache.set(key, entry);
-  try {
-    localStorage.setItem(LS_PREFIX + key, JSON.stringify(entry));
-  } catch (_) {
-    // Quota exceeded — evict oldest VIC-roads entries and retry once
+  const persist = () => {
     try {
-      const keys = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith(LS_PREFIX)) keys.push(k);
-      }
-      keys.slice(0, Math.ceil(keys.length / 2)).forEach(k => localStorage.removeItem(k));
       localStorage.setItem(LS_PREFIX + key, JSON.stringify(entry));
-    } catch (_2) {}
-  }
+    } catch (_) {
+      // Quota exceeded — evict oldest road-map entries and retry once.
+      try {
+        const keys = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith(LS_PREFIX)) keys.push(k);
+        }
+        keys.slice(0, Math.ceil(keys.length / 2)).forEach(k => localStorage.removeItem(k));
+        localStorage.setItem(LS_PREFIX + key, JSON.stringify(entry));
+      } catch (_2) {}
+    }
+  };
+  if ('requestIdleCallback' in window) window.requestIdleCallback(persist, { timeout: 1500 });
+  else setTimeout(persist, 0);
 }
 
 async function cachedFetch(cacheKey, url, ttl, fetchOpts = {}) {
@@ -538,17 +583,37 @@ let isDark = false;
 let tileLayer;
 
 const TILES = {
-  dark:  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-  light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+  dark:  'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  light: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
 };
 
 function applyTile() {
   if (tileLayer) map.removeLayer(tileLayer);
   tileLayer = L.tileLayer(isDark ? TILES.dark : TILES.light, {
-    attribution: '© OpenStreetMap contributors © CARTO',
-    subdomains: 'abcd',
+    attribution: '© OpenStreetMap contributors',
+    subdomains: 'abc',
     maxZoom: 19,
   }).addTo(map);
+  tileLayer.on('tileerror', () => showMapMessage('Map tiles could not be loaded. Check your connection or try again later.'));
+  tileLayer.on('tileload', clearMapMessage);
+}
+
+let mapMessage;
+function showMapMessage(message) {
+  if (!mapMessage) {
+    mapMessage = document.createElement('div');
+    mapMessage.className = 'map-message';
+    mapMessage.setAttribute('role', 'status');
+    document.getElementById('map').appendChild(mapMessage);
+  }
+  mapMessage.textContent = message;
+}
+
+function clearMapMessage() {
+  if (mapMessage) {
+    mapMessage.remove();
+    mapMessage = null;
+  }
 }
 
 function toggleTheme() {
@@ -566,19 +631,16 @@ function toggleTheme() {
 // ROAD TYPE CONFIG
 // ═══════════════════════════════════════════
 const ROAD_TYPES = {
-  highway:  { label: 'Freeway / Highway',  color: '#e05c5c', weight: 5,   opacity: 0.9,  desc: 'Divided carriageway, fully sealed bitumen. High-speed, controlled access.' },
-  arterial: { label: 'Arterial Road',       color: '#e08c00', weight: 3.5, opacity: 0.85, desc: 'Sealed asphalt or concrete. Major connector between suburbs and towns.' },
-  local:    { label: 'Local Street',        color: '#2ea44f', weight: 2,   opacity: 0.75, desc: 'Sealed bitumen. Low-speed neighbourhood access road.' },
-  gravel:   { label: 'Gravel Road',         color: '#c4894a', weight: 2.5, opacity: 0.9,  desc: 'Compacted gravel. Common in rural areas worldwide. Can become corrugated.' },
-  dirt:     { label: 'Dirt / Unsealed',     color: '#a05a10', weight: 2,   opacity: 0.85, desc: 'Natural earth surface. Impassable in wet conditions. 4WD recommended.' },
-  track:    { label: 'Track / Fire Road',   color: '#7d5230', weight: 1.5, opacity: 0.8,  desc: 'Unsealed 4WD track. Forestry/fire access. May be rough.' },
-  path:     { label: 'Path / Service Road', color: '#888888', weight: 1,   opacity: 0.6,  desc: 'Service lane or shared path. Sealed or paved.' },
+  highway:  { label: 'Freeway / Highway',  color: '#e31a1c', weight: 5.5, opacity: 0.98, desc: 'Major high-speed route. Roads tagged with an unpaved surface appear under Unpaved Road.' },
+  arterial: { label: 'Arterial Road',       color: '#ff7f00', weight: 4.2, opacity: 0.96, desc: 'Major connector between suburbs and towns. Unpaved surfaces appear under Unpaved Road.' },
+  local:    { label: 'Paved Local Street',   color: '#1f78b4', weight: 2.8, opacity: 0.92, desc: 'Neighbourhood access street, treated as paved unless OpenStreetMap marks it unpaved.' },
+  unpaved:  { label: 'Unpaved Road',         color: '#8e44ad', weight: 3.2, opacity: 0.96, desc: 'Roads tagged with gravel, compacted, dirt, earth, mud, sand, ground, or another unpaved surface; tracks without a paved surface tag are included.' },
 };
 
 // ═══════════════════════════════════════════
 // MAP INIT
 // ═══════════════════════════════════════════
-const map = L.map('map', { center: [-37.0, 144.5], zoom: 9, zoomControl: true });
+const map = L.map('map', { center: [-37.8136, 144.9631], zoom: 8, zoomControl: true, preferCanvas: true });
 applyTile();
 
 // Restore saved theme
@@ -589,8 +651,10 @@ try {
 let roadLayer     = L.layerGroup().addTo(map);
 let activeFilters = new Set(Object.keys(ROAD_TYPES));
 let roadCounts    = {};
+let roadCountsAvailable = map.getZoom() >= 11;
 let allRoads      = [];
 let loadTimeout;
+let roadLoadGeneration = 0;
 
 // ═══════════════════════════════════════════
 // LEGEND
@@ -604,11 +668,12 @@ function renderLegend() {
     div.innerHTML = `
       <div class="legend-color" style="background:${cfg.color}"></div>
       <span class="legend-label">${cfg.label}</span>
-      <span class="legend-count">${roadCounts[key] || 0}</span>`;
+      <span class="legend-count">${roadCountsAvailable ? (roadCounts[key] || 0) : '—'}</span>`;
     div.onclick = () => {
       activeFilters.has(key) ? activeFilters.delete(key) : activeFilters.add(key);
       div.classList.toggle('inactive');
       renderRoads();
+      if (overviewRoadLayer) overviewRoadLayer.redraw();
     };
     el.appendChild(div);
   });
@@ -618,50 +683,148 @@ function renderLegend() {
 // ROAD RENDERING
 // ═══════════════════════════════════════════
 function getRoadType(tags) {
-  const hw      = tags.highway || '';
-  const surface = (tags.surface || '').toLowerCase();
-  if (['gravel','compacted','fine_gravel','pebblestone'].includes(surface)) return 'gravel';
-  if (['dirt','earth','mud','unpaved','sand','ground'].includes(surface))   return 'dirt';
-  if (hw === 'motorway' || hw === 'trunk')                                  return 'highway';
-  if (hw === 'primary'  || hw === 'secondary')                              return 'arterial';
+  const hw      = String(tags.highway || '').trim().toLowerCase();
+  const surface = String(tags.surface || '').trim().toLowerCase();
+  const tracktype = String(tags.tracktype || '').trim().toLowerCase();
+  const unpavedSurfaces = ['gravel','compacted','fine_gravel','pebblestone','dirt','earth','mud','unpaved','sand','ground','grass','rock','bare_rock','woodchips'];
+  const pavedSurfaces = ['paved','asphalt','concrete','paving_stones','sett','cobblestone','metal','wood','bricks'];
+  const unpavedTracktypes = ['grade2','grade3','grade4','grade5'];
+  if (!hw || hw === 'rail') return null;
+
+  const isKnownUnpavedSurface = unpavedSurfaces.includes(surface);
+  const isKnownPavedSurface = pavedSurfaces.includes(surface);
+  if (isKnownUnpavedSurface) return 'unpaved';
+
+  // Prefer a recognized surface value. Use tracktype only when surface is
+  // missing or not one of the recognized surface values.
+  const isKnownUnpavedTracktype = !isKnownPavedSurface && unpavedTracktypes.includes(tracktype);
+  const isKnownPavedTracktype = !isKnownPavedSurface && !isKnownUnpavedTracktype && tracktype === 'grade1';
+  if (isKnownUnpavedTracktype) return 'unpaved';
+  if (hw === 'track') {
+    return isKnownPavedSurface || isKnownPavedTracktype ? null : 'unpaved';
+  }
+
+  // When surface metadata is missing or unrecognized, retain the highway
+  // class instead of assuming the road is unpaved.
+  if (hw === 'motorway' || hw === 'trunk') return 'highway';
+  if (hw === 'primary' || hw === 'secondary') return 'arterial';
   if (['residential','tertiary','unclassified','living_street'].includes(hw)) return 'local';
-  if (hw === 'track')                                                        return 'track';
-  if (hw === 'service')                                                      return 'path';
-  return 'local';
+  return null;
+}
+
+function getHierarchyRoadType(tags) {
+  const highway = String(tags.highway || '').replace(/_link$/, '');
+  if (highway === 'motorway' || highway === 'trunk') return 'highway';
+  if (highway === 'primary' || highway === 'secondary') return 'arterial';
+  if (['residential', 'tertiary', 'unclassified', 'living_street'].includes(highway)) return 'local';
+  return null;
+}
+
+let overviewRoadLayer = null;
+
+function setOverviewRoadLayerVisible(visible) {
+  if (!overviewRoadLayer && window.L?.vectorGrid?.protobuf) {
+    const url = 'https://vector.openstreetmap.org/shortbread_v1/{z}/{x}/{y}.mvt';
+    const hiddenTileLayer = { color: '#000000', weight: 0, opacity: 0, fill: false, fillOpacity: 0 };
+    overviewRoadLayer = L.vectorGrid.protobuf(url, {
+      rendererFactory: L.canvas.tile,
+      minZoom: 5,
+      maxNativeZoom: 14,
+      interactive: false,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
+      vectorTileLayerStyles: {
+        ocean: hiddenTileLayer,
+        water_polygons: hiddenTileLayer,
+        water_polygons_labels: hiddenTileLayer,
+        water_lines: hiddenTileLayer,
+        water_lines_labels: hiddenTileLayer,
+        dam_lines: hiddenTileLayer,
+        dam_polygons: hiddenTileLayer,
+        pier_lines: hiddenTileLayer,
+        pier_polygons: hiddenTileLayer,
+        boundaries: hiddenTileLayer,
+        boundary_labels: hiddenTileLayer,
+        place_labels: hiddenTileLayer,
+        land: hiddenTileLayer,
+        sites: hiddenTileLayer,
+        buildings: hiddenTileLayer,
+        addresses: hiddenTileLayer,
+        street_polygons: hiddenTileLayer,
+        street_labels: hiddenTileLayer,
+        street_polygons_labels: hiddenTileLayer,
+        street_labels_points: hiddenTileLayer,
+        bridges: hiddenTileLayer,
+        aerialways: hiddenTileLayer,
+        ferries: hiddenTileLayer,
+        public_transport: hiddenTileLayer,
+        pois: hiddenTileLayer,
+        streets: (properties, zoom) => {
+          // Shortbread's `kind` is the OSM highway value; its tiles also carry
+          // `surface`, so the overview uses the same road classification.
+          const highway = String(properties.kind || '').replace(/_link$/, '');
+          const tags = {
+            highway,
+            surface: properties.surface || '',
+            tracktype: properties.tracktype || '',
+          };
+          if (properties.rail) return { color: '#000000', weight: 0, opacity: 0 };
+          const type = getRoadType(tags);
+          if (!type || !activeFilters.has(type)) {
+            return { color: '#000000', weight: 0, opacity: 0 };
+          }
+          // At the default wide view, keep local streets sparse and reserve
+          // unpaved styling for closer zooms where surface tags are available.
+          if ((zoom < 10 && type === 'local') || (zoom < 11 && type === 'unpaved')) {
+            return { color: '#000000', weight: 0, opacity: 0 };
+          }
+          const cfg = ROAD_TYPES[type];
+          return { color: cfg.color, weight: Math.max(1.2, cfg.weight * (zoom < 10 ? 0.55 : 0.75)), opacity: cfg.opacity };
+        },
+      },
+    });
+  }
+
+  if (!overviewRoadLayer) return false;
+  if (visible && !map.hasLayer(overviewRoadLayer)) overviewRoadLayer.addTo(map);
+  else if (!visible && map.hasLayer(overviewRoadLayer)) map.removeLayer(overviewRoadLayer);
+  return true;
 }
 
 function renderRoads() {
   roadLayer.clearLayers();
-  allRoads.forEach(({ type, latlngs, tags, name }) => {
-    if (!activeFilters.has(type)) return;
-    const cfg  = ROAD_TYPES[type];
+  allRoads.forEach(({ type, hierarchyType, latlngs, tags, name }) => {
+    const shownType = type || hierarchyType;
+    if (!shownType || !activeFilters.has(shownType)) return;
+    const cfg  = ROAD_TYPES[shownType];
     const line = L.polyline(latlngs, { color: cfg.color, weight: cfg.weight, opacity: cfg.opacity });
-    line.on('click',     () => showRoadInfo(name, type, tags));
+    line.on('click',     () => showRoadInfo(name, shownType, tags, type, hierarchyType));
     line.on('mouseover', function() { this.setStyle({ weight: cfg.weight + 2, opacity: 1 }); });
     line.on('mouseout',  function() { this.setStyle({ weight: cfg.weight, opacity: cfg.opacity }); });
     const displayName = name || tags.ref || 'Unnamed Road';
     line.bindPopup(`
       <div class="popup-title">${displayName}</div>
       <div class="popup-type" style="color:${cfg.color}">${cfg.label}</div>
-      ${tags.surface  ? `<div class="popup-meta">Surface: ${tags.surface}</div>` : ''}
+      ${tags.surface  ? `<div class="popup-meta">Surface: ${tags.surface}</div>` : type === 'unpaved' ? '<div class="popup-meta">Surface: Unpaved (locally inferred)</div>' : ''}
+      ${hierarchyType ? `<div class="popup-meta">Road class: ${ROAD_TYPES[hierarchyType].label}</div>` : ''}
       ${tags.maxspeed ? `<div class="popup-meta">Speed: ${tags.maxspeed} km/h</div>` : ''}
     `, { maxWidth: 220 });
     roadLayer.addLayer(line);
   });
 }
 
-function showRoadInfo(name, type, tags) {
+function showRoadInfo(name, type, tags, surfaceType = type, hierarchyType = null) {
   const cfg         = ROAD_TYPES[type];
   const el          = document.getElementById('roadInfo');
   const ph          = document.getElementById('placeholderText');
   const displayName = name || tags.ref || 'Unnamed Road';
-  const surface     = tags.surface || (type === 'gravel' ? 'Gravel' : type === 'dirt' ? 'Dirt/Earth' : 'Sealed');
+  const surface     = tags.surface || (surfaceType === 'unpaved' ? 'Unpaved (inferred)' : 'Not specified');
   el.innerHTML = `
     <div class="road-name">${displayName}</div>
     <div class="road-badge" style="background:${cfg.color}22;color:${cfg.color};border:1px solid ${cfg.color}55">${cfg.label}</div>
     <div class="road-detail">
       ${cfg.desc}<br><br>
       <strong>Surface:</strong> ${surface}<br>
+      ${hierarchyType ? `<strong>Road class:</strong> ${ROAD_TYPES[hierarchyType].label}<br>` : ''}
       <strong>Lanes:</strong> ${tags.lanes ? tags.lanes + ' lanes' : 'Unknown'}<br>
       <strong>Speed limit:</strong> ${tags.maxspeed ? tags.maxspeed + ' km/h' : 'Not specified'}<br>
       <strong>Lighting:</strong> ${tags.lit === 'yes' ? 'Yes' : tags.lit === 'no' ? 'No' : 'Unknown'}<br>
@@ -677,8 +840,8 @@ function showRoadInfo(name, type, tags) {
 // ═══════════════════════════════════════════
 function updateStats() {
   const total    = allRoads.length;
-  const sealed   = allRoads.filter(r => ['highway','arterial','local','path'].includes(r.type)).length;
-  const unsealed = allRoads.filter(r => ['gravel','dirt','track'].includes(r.type)).length;
+  const sealed   = allRoads.filter(r => r.type !== 'unpaved').length;
+  const unsealed = allRoads.filter(r => r.type === 'unpaved').length;
   document.getElementById('totalRoads').textContent    = total > 999 ? (total/1000).toFixed(1)+'k' : total || '—';
   document.getElementById('sealedPct').textContent     = total ? Math.round(sealed/total*100)+'%' : '—';
   document.getElementById('unsealedCount').textContent = unsealed || '—';
@@ -715,57 +878,148 @@ function buildQuery(bounds) {
   const b = `${snap(bounds.getSouth())},${snap(bounds.getWest())},${snap(bounds.getNorth())},${snap(bounds.getEast())}`;
   return {
     key: `roads:${b}`,
-    url: `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(
+    url: endpoint => `${endpoint}?data=${encodeURIComponent(
       `[out:json][timeout:25];(way["highway"~"motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|track|service"](${b}););out geom qt;`
     )}`,
   };
 }
 
+async function fetchRoadData(cacheKey, makeUrl) {
+  const cached = cacheGet(cacheKey, { allowStaleFor: ROAD_STALE_TTL });
+  if (cached.hit && Array.isArray(cached.data?.elements)) {
+    return { data: cached.data, fromCache: true, stale: false };
+  }
+  const staleData = cached.stale && Array.isArray(cached.data?.elements) ? cached.data : null;
+  if ((cached.hit || cached.stale) && !staleData) {
+    memCache.delete(cacheKey);
+    try { localStorage.removeItem(LS_PREFIX + cacheKey); } catch (_) {}
+  }
+
+  const endpoints = [
+    // The client timeout must exceed the query's 25-second Overpass limit,
+    // otherwise a healthy but slow response is aborted by this page first.
+    { url: 'https://overpass.private.coffee/api/interpreter', timeout: 30000 },
+    { url: 'https://overpass-api.de/api/interpreter', timeout: 30000 },
+    { url: 'https://maps.mail.ru/osm/tools/overpass/api/interpreter', timeout: 30000 },
+  ];
+  let lastError;
+  for (const { url: endpoint, timeout: timeoutMs } of endpoints) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      let response;
+      try {
+        response = await fetch(makeUrl(endpoint), { signal: controller.signal });
+      } finally {
+        clearTimeout(timeout);
+      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (!Array.isArray(data.elements)) throw new Error(data.remark || 'Invalid road data response');
+      cacheSet(cacheKey, data, ROAD_TTL);
+      return { data, fromCache: false, stale: false };
+    } catch (error) {
+      lastError = error;
+      console.warn(`Road data request failed at ${endpoint}:`, error);
+    }
+  }
+  if (staleData) return { data: staleData, fromCache: true, stale: true };
+  throw lastError || new Error('No road data server is available');
+}
+
 async function loadRoads() {
+  const generation = ++roadLoadGeneration;
   const bounds = map.getBounds();
+  const zoom = map.getZoom();
   document.getElementById('roadCacheBadge').classList.remove('visible');
 
-  if (map.getZoom() < 11) {
+  if (zoom < 8) {
+    setOverviewRoadLayerVisible(false);
     document.getElementById('loadingOverlay').style.display = 'none';
     roadLayer.clearLayers();
     allRoads = [];
+    roadCountsAvailable = false;
+    document.getElementById('placeholderText').textContent = 'Zoom in to level 8+ to show major paved roads; zoom to level 11+ for local road and surface detail.';
     renderLegend();
     updateStats();
     showZoomMessage();
     return;
   }
 
+  if (zoom < 11) {
+    const overviewLoaded = setOverviewRoadLayerVisible(true);
+    roadLayer.clearLayers();
+    allRoads = [];
+    roadCounts = {};
+    roadCountsAvailable = false;
+    renderLegend();
+    updateStats();
+    document.getElementById('loadingOverlay').style.display = 'none';
+    document.getElementById('placeholderText').textContent = overviewLoaded
+      ? 'Main road classes are shown from map tiles. Zoom in to level 11 for local and detailed surface data.'
+      : 'The road overview tiles could not be loaded; zoom in to level 11 to request detailed road data.';
+    removeZoomMessage();
+    return;
+  }
+
+  setOverviewRoadLayerVisible(false);
   removeZoomMessage();
+  document.getElementById('loadingText').textContent = 'LOADING ROAD DATA…';
   document.getElementById('loadingOverlay').style.display = 'flex';
 
   const { key, url } = buildQuery(bounds);
 
   try {
-    const { data, fromCache } = await cachedFetch(key, url, ROAD_TTL);
+    const { data, fromCache, stale } = await fetchRoadData(key, url);
+    // Ignore responses from a previous viewport or a request that finished
+    // after the user zoomed back out below the road-data threshold.
+    if (generation !== roadLoadGeneration || map.getZoom() < 11) return;
 
     allRoads   = [];
     roadCounts = {};
+    roadCountsAvailable = true;
     Object.keys(ROAD_TYPES).forEach(k => roadCounts[k] = 0);
 
     (data.elements || data).forEach(el => {
       if (el.type !== 'way' || !el.geometry) return;
       const latlngs = el.geometry.map(p => [p.lat, p.lon]);
-      const type    = getRoadType(el.tags || {});
-      allRoads.push({ type, latlngs, tags: el.tags || {}, name: (el.tags || {}).name || '' });
-      roadCounts[type] = (roadCounts[type] || 0) + 1;
+      const tags = el.tags || {};
+      const type = getRoadType(tags);
+      const hierarchyType = getHierarchyRoadType(tags);
+      if (!type && !hierarchyType) return;
+      if (overview && type === 'unpaved') return;
+      const displayType = type || hierarchyType;
+      allRoads.push({ type: displayType, hierarchyType, latlngs, tags, name: tags.name || '' });
+      roadCounts[displayType] = (roadCounts[displayType] || 0) + 1;
     });
 
     renderRoads();
     renderLegend();
     updateStats();
+    document.getElementById('placeholderText').textContent = stale
+      ? 'Showing saved road data because live updates are unavailable. Pan or zoom to retry.'
+      : 'Click any road on the map to view its surface type and details.';
 
-    if (fromCache) document.getElementById('roadCacheBadge').classList.add('visible');
+    if (fromCache) {
+      document.getElementById('roadCacheLabel').textContent = stale ? 'SAVED DATA' : 'CACHED DATA';
+      document.getElementById('roadCacheBadge').classList.add('visible');
+    }
   } catch(e) {
+    if (generation !== roadLoadGeneration) return;
     console.error('Road load failed:', e);
+    roadLayer.clearLayers();
+    allRoads = [];
+    roadCounts = {};
+    roadCountsAvailable = false;
+    renderLegend();
+    updateStats();
     document.getElementById('loadingText').textContent = 'LOAD FAILED — TRY AGAIN';
+    document.getElementById('placeholderText').textContent = `Road data unavailable (${e.message}). Pan or zoom the map to retry.`;
   }
 
-  document.getElementById('loadingOverlay').style.display = 'none';
+  if (generation === roadLoadGeneration) {
+    document.getElementById('loadingOverlay').style.display = 'none';
+  }
 }
 
 // ═══════════════════════════════════════════
@@ -846,7 +1100,9 @@ map.on('moveend', scheduleGeoUpdate);
 // Init
 renderLegend();
 showZoomMessage();
+if (map.getZoom() >= 8 && map.getZoom() < 11) setOverviewRoadLayerVisible(true);
 updateLocationLabel();
+scheduleLoad();
 </script>
 </body>
 </html>
