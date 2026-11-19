@@ -423,6 +423,27 @@
   ::-webkit-scrollbar-track { background: var(--bg); }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
+  /* highlight mode switch + zoom-aware legend */
+  .mode-switch { display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; margin-bottom:10px; }
+  .mode-switch button {
+    flex:1; padding:6px 4px; background:transparent; border:0; border-right:1px solid var(--border);
+    color:var(--muted); font-family:'Space Mono',monospace; font-size:0.66rem; letter-spacing:1px;
+    text-transform:uppercase; cursor:pointer; transition:background 0.2s, color 0.2s;
+  }
+  .mode-switch button:last-child { border-right:0; }
+  .mode-switch button:hover { background:var(--hover); }
+  .mode-switch button.active { background:var(--accent); color:var(--panel); font-weight:700; }
+  .legend-group {
+    font-family:'Space Mono',monospace; font-size:0.62rem; letter-spacing:2px;
+    text-transform:uppercase; color:var(--muted); margin:10px 0 4px;
+  }
+  .legend-item.locked { opacity:0.5; }
+  .legend-zoom {
+    font-family:'Space Mono',monospace; font-size:0.6rem; color:var(--muted);
+    border:1px solid var(--border); border-radius:3px; padding:0 4px; margin-right:6px;
+  }
+  .zoom-hint { font-size:0.8rem; color:var(--muted); margin-top:10px; line-height:1.5; }
+
   @media (max-width: 600px) { .sidebar { display: none; } }
 </style>
 </head>
@@ -470,7 +491,13 @@
 
     <div class="sidebar-section">
       <h3>Road Surface Types</h3>
+      <div class="mode-switch" id="modeSwitch" role="group" aria-label="Highlight roads">
+        <button data-mode="paved" class="active" title="Emphasise paved roads">Paved</button>
+        <button data-mode="unpaved" title="Emphasise unpaved roads">Unpaved</button>
+        <button data-mode="all" title="Show every road equally">All</button>
+      </div>
       <div id="legend"></div>
+      <div class="zoom-hint" id="zoomHint"></div>
       <div class="cache-badge" id="roadCacheBadge"><div class="cache-dot"></div><span id="roadCacheLabel">CACHED DATA</span></div>
     </div>
 
@@ -478,7 +505,7 @@
       <h3>Quick Stats</h3>
       <div class="stats-grid">
         <div class="stat-card"><div class="stat-value" id="totalRoads">—</div><div class="stat-label">Segments</div></div>
-        <div class="stat-card"><div class="stat-value" id="sealedPct">—</div><div class="stat-label">Sealed %</div></div>
+        <div class="stat-card"><div class="stat-value" id="sealedPct">—</div><div class="stat-label">Paved %</div></div>
         <div class="stat-card"><div class="stat-value" id="unsealedCount">—</div><div class="stat-label">Unpaved</div></div>
         <div class="stat-card"><div class="stat-value" id="highwayCount">—</div><div class="stat-label">Highways</div></div>
       </div>
@@ -488,7 +515,7 @@
       <h3>Selected Road</h3>
       <div class="road-info" id="roadInfo"></div>
       <div class="placeholder-text" id="placeholderText">
-        Main paved road classes load at the default zoom. Zoom in to level 11 for local roads and surface detail.
+        Paved roads are highlighted by default. Zoom in to reveal more road types and surface detail; click any road for details.
       </div>
     </div>
   </div>
@@ -631,10 +658,16 @@ function toggleTheme() {
 // ROAD TYPE CONFIG
 // ═══════════════════════════════════════════
 const ROAD_TYPES = {
-  highway:  { label: 'Freeway / Highway',  color: '#e31a1c', weight: 5.5, opacity: 0.98, desc: 'Major high-speed route. Roads tagged with an unpaved surface appear under Unpaved Road.' },
-  arterial: { label: 'Arterial Road',       color: '#ff7f00', weight: 4.2, opacity: 0.96, desc: 'Major connector between suburbs and towns. Unpaved surfaces appear under Unpaved Road.' },
-  local:    { label: 'Paved Local Street',   color: '#1f78b4', weight: 2.8, opacity: 0.92, desc: 'Neighbourhood access street, treated as paved unless OpenStreetMap marks it unpaved.' },
-  unpaved:  { label: 'Unpaved Road',         color: '#8e44ad', weight: 3.2, opacity: 0.96, desc: 'Roads tagged with gravel, compacted, dirt, earth, mud, sand, ground, or another unpaved surface; tracks without a paved surface tag are included.' },
+  // ── Paved (a road is paved only when it can be recognised as paved) ──
+  motorway:  { label: 'Freeway / Highway', color: '#e31a1c', weight: 5.5, opacity: 0.98, paved: true,  minZoom: 8,  desc: 'Motorway or trunk road. Treated as paved unless tagged otherwise.' },
+  primary:   { label: 'Primary Road',      color: '#ff7f00', weight: 4.6, opacity: 0.96, paved: true,  minZoom: 8,  desc: 'Major connector between towns. Treated as paved unless tagged otherwise.' },
+  secondary: { label: 'Secondary Road',    color: '#d4a017', weight: 4.0, opacity: 0.96, paved: true,  minZoom: 9,  desc: 'Connector between smaller towns and suburbs. Treated as paved unless tagged otherwise.' },
+  tertiary:  { label: 'Tertiary Road',     color: '#33a02c', weight: 3.4, opacity: 0.94, paved: true,  minZoom: 10, desc: 'Paved only when OpenStreetMap shows a paved surface or clear evidence (lighting, footpaths, kerbs).' },
+  local:     { label: 'Paved Local Street',color: '#1f78b4', weight: 2.8, opacity: 0.92, paved: true,  minZoom: 11, desc: 'Residential / unclassified street with a paved surface tag or clear paved evidence.' },
+  service:   { label: 'Paved Service Road',color: '#2aa198', weight: 2.2, opacity: 0.90, paved: true,  minZoom: 14, desc: 'Service or access road with a paved surface tag or clear paved evidence.' },
+  // ── Unpaved (default for anything that cannot be recognised as paved) ──
+  unpaved:   { label: 'Unpaved Road',      color: '#8e44ad', weight: 3.2, opacity: 0.96, paved: false, minZoom: 10, desc: 'Gravel, dirt, compacted etc. — or any road that cannot be recognised as paved. Dashed = no surface tag, assumed unpaved.' },
+  track:     { label: 'Unpaved Track',     color: '#8b5a2b', weight: 2.6, opacity: 0.96, paved: false, minZoom: 12, desc: 'Forest, farm or fire track. Tracks are unpaved unless explicitly tagged with a paved surface.' },
 };
 
 // ═══════════════════════════════════════════
@@ -650,6 +683,7 @@ try {
 
 let roadLayer     = L.layerGroup().addTo(map);
 let activeFilters = new Set(Object.keys(ROAD_TYPES));
+let focusMode     = 'paved'; // 'paved' (default) | 'unpaved' | 'all'
 let roadCounts    = {};
 let roadCountsAvailable = map.getZoom() >= 11;
 let allRoads      = [];
@@ -659,65 +693,138 @@ let roadLoadGeneration = 0;
 // ═══════════════════════════════════════════
 // LEGEND
 // ═══════════════════════════════════════════
+function refreshRoadStyles() {
+  renderRoads();
+  if (overviewRoadLayer) overviewRoadLayer.redraw();
+}
+
+function setFocusMode(mode) {
+  focusMode = mode;
+  document.querySelectorAll('#modeSwitch button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  refreshRoadStyles();
+}
+document.querySelectorAll('#modeSwitch button').forEach(b => b.addEventListener('click', () => setFocusMode(b.dataset.mode)));
+
 function renderLegend() {
-  const el = document.getElementById('legend');
+  const el   = document.getElementById('legend');
+  const zoom = map.getZoom();
   el.innerHTML = '';
-  Object.entries(ROAD_TYPES).forEach(([key, cfg]) => {
-    const div = document.createElement('div');
-    div.className = 'legend-item' + (activeFilters.has(key) ? '' : ' inactive');
-    div.innerHTML = `
-      <div class="legend-color" style="background:${cfg.color}"></div>
-      <span class="legend-label">${cfg.label}</span>
-      <span class="legend-count">${roadCountsAvailable ? (roadCounts[key] || 0) : '—'}</span>`;
-    div.onclick = () => {
-      activeFilters.has(key) ? activeFilters.delete(key) : activeFilters.add(key);
-      div.classList.toggle('inactive');
-      renderRoads();
-      if (overviewRoadLayer) overviewRoadLayer.redraw();
-    };
-    el.appendChild(div);
+  [['Paved', true], ['Unpaved', false]].forEach(([title, paved]) => {
+    const head = document.createElement('div');
+    head.className = 'legend-group';
+    head.textContent = title;
+    el.appendChild(head);
+    Object.entries(ROAD_TYPES).filter(([, c]) => c.paved === paved).forEach(([key, cfg]) => {
+      const locked = zoom < cfg.minZoom;
+      const div = document.createElement('div');
+      div.className = 'legend-item' + (activeFilters.has(key) ? '' : ' inactive') + (locked ? ' locked' : '');
+      div.title = cfg.desc;
+      div.innerHTML = `
+        <div class="legend-color" style="background:${cfg.color}"></div>
+        <span class="legend-label">${cfg.label}</span>
+        ${locked ? `<span class="legend-zoom">z${cfg.minZoom}+</span>` : ''}
+        <span class="legend-count">${roadCountsAvailable && !locked ? (roadCounts[key] || 0) : '—'}</span>`;
+      div.onclick = () => {
+        activeFilters.has(key) ? activeFilters.delete(key) : activeFilters.add(key);
+        refreshRoadStyles();
+      };
+      el.appendChild(div);
+    });
   });
+
+  const upcoming = Object.values(ROAD_TYPES).map(c => c.minZoom).filter(z => z > zoom).sort((a, b) => a - b)[0];
+  const hint = document.getElementById('zoomHint');
+  if (hint) {
+    const next = upcoming ? Object.values(ROAD_TYPES).filter(c => c.minZoom === upcoming).map(c => c.label).join(' & ') : '';
+    hint.innerHTML = `Zoom ${zoom}` + (upcoming ? ` — zoom to ${upcoming} to add ${next}.` : ' — all road types shown.') +
+      '<br>Dashed line = no surface tag, assumed unpaved.';
+  }
 }
 
 // ═══════════════════════════════════════════
 // ROAD RENDERING
 // ═══════════════════════════════════════════
-function getRoadType(tags) {
-  const hw      = String(tags.highway || '').trim().toLowerCase();
-  const surface = String(tags.surface || '').trim().toLowerCase();
-  const tracktype = String(tags.tracktype || '').trim().toLowerCase();
-  const unpavedSurfaces = ['gravel','compacted','fine_gravel','pebblestone','dirt','earth','mud','unpaved','sand','ground','grass','rock','bare_rock','woodchips'];
-  const pavedSurfaces = ['paved','asphalt','concrete','paving_stones','sett','cobblestone','metal','wood','bricks'];
-  const unpavedTracktypes = ['grade2','grade3','grade4','grade5'];
-  if (!hw || hw === 'rail') return null;
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 
-  const isKnownUnpavedSurface = unpavedSurfaces.includes(surface);
-  const isKnownPavedSurface = pavedSurfaces.includes(surface);
-  if (isKnownUnpavedSurface) return 'unpaved';
+const UNPAVED_RE = /^(unpaved|gravel|fine_gravel|compacted|pebblestone|dirt|earth|ground|soil|mud|sand|grass|rock|bare_rock|woodchips|clay|salt|snow|ice)/;
+const PAVED_RE   = /^(paved|asphalt|chipseal|concrete|paving_stones|sett|cobblestone|unhewn_cobblestone|bricks?|metal|wood|tartan|rubber|plastic|sealed|bitumen|tarmac)/;
+const IMPLIED_PAVED = new Set(['motorway', 'primary', 'secondary']);
 
-  // Prefer a recognized surface value. Use tracktype only when surface is
-  // missing or not one of the recognized surface values.
-  const isKnownUnpavedTracktype = !isKnownPavedSurface && unpavedTracktypes.includes(tracktype);
-  const isKnownPavedTracktype = !isKnownPavedSurface && !isKnownUnpavedTracktype && tracktype === 'grade1';
-  if (isKnownUnpavedTracktype) return 'unpaved';
-  if (hw === 'track') {
-    return isKnownPavedSurface || isKnownPavedTracktype ? null : 'unpaved';
-  }
-
-  // When surface metadata is missing or unrecognized, retain the highway
-  // class instead of assuming the road is unpaved.
-  if (hw === 'motorway' || hw === 'trunk') return 'highway';
-  if (hw === 'primary' || hw === 'secondary') return 'arterial';
-  if (['residential','tertiary','unclassified','living_street'].includes(hw)) return 'local';
+function roadClass(tags) {
+  const hw = String(tags.highway || '').trim().toLowerCase().replace(/_link$/, '');
+  if (hw === 'motorway' || hw === 'trunk') return 'motorway';
+  if (hw === 'primary')   return 'primary';
+  if (hw === 'secondary') return 'secondary';
+  if (hw === 'tertiary')  return 'tertiary';
+  if (['residential', 'unclassified', 'living_street'].includes(hw)) return 'local';
+  if (hw === 'service')   return 'service';
+  if (hw === 'track')     return 'track';
   return null;
 }
 
-function getHierarchyRoadType(tags) {
-  const highway = String(tags.highway || '').replace(/_link$/, '');
-  if (highway === 'motorway' || highway === 'trunk') return 'highway';
-  if (highway === 'primary' || highway === 'secondary') return 'arterial';
-  if (['residential', 'tertiary', 'unclassified', 'living_street'].includes(highway)) return 'local';
+// 'paved' | 'unpaved' | 'unrecognised' | null (no surface tag at all)
+function surfaceVerdict(raw) {
+  const parts = String(raw || '').toLowerCase().split(/[;,]/).map(x => x.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  if (parts.some(x => UNPAVED_RE.test(x))) return 'unpaved';
+  if (parts.every(x => PAVED_RE.test(x)))  return 'paved';
+  return 'unrecognised';
+}
+
+// Positive evidence that an untagged road is sealed (only available with full OSM tags).
+function pavedEvidence(tags) {
+  if (tags.lit === 'yes') return 'street lighting';
+  if (Object.keys(tags).some(k => /^(sidewalk|cycleway|parking:lane|kerb)/.test(k) && !['no', 'none'].includes(String(tags[k]).toLowerCase()))) return 'footpath / kerb / parking tags';
+  if (tags.lane_markings === 'yes') return 'lane markings';
+  if (parseInt(tags.lanes, 10) >= 2) return 'multiple lanes';
+  if (['excellent', 'good', 'intermediate'].includes(String(tags.smoothness || '').toLowerCase())) return 'smoothness=' + tags.smoothness;
   return null;
+}
+
+/* A road is PAVED only if it can be recognised as paved:
+     1. a paved surface tag, or
+     2. a motorway/primary/secondary class with no contrary tag, or
+     3. paved evidence (lighting, footpaths, kerbs, markings, …).
+   Everything else is UNPAVED by default. */
+function classifyRoad(tags, { overview = false } = {}) {
+  const cls = roadClass(tags);
+  if (!cls) return null;
+  if (cls === 'service' && /^(driveway|parking_aisle|drive-through)$/.test(String(tags.service || ''))) return null;
+
+  const verdict   = surfaceVerdict(tags.surface);
+  const tracktype = String(tags.tracktype || '').toLowerCase();
+  let paved, basis, basisText;
+
+  if (verdict === 'paved')            { paved = true;  basis = 'surface';      basisText = 'Tagged paved surface'; }
+  else if (verdict === 'unpaved')     { paved = false; basis = 'surface';      basisText = 'Tagged unpaved surface'; }
+  else if (verdict === 'unrecognised'){ paved = false; basis = 'unrecognised'; basisText = `Unrecognised surface value "${tags.surface}" — assumed unpaved`; }
+  else if (/^grade[1-5]$/.test(tracktype)) { paved = false; basis = 'tracktype'; basisText = `Inferred unpaved from tracktype=${tracktype}`; }
+  else if (cls === 'track')           { paved = false; basis = 'class';        basisText = 'Track with no paved surface tag'; }
+  else if (IMPLIED_PAVED.has(cls))    { paved = true;  basis = 'class';        basisText = 'Paved by road class (no surface tag)'; }
+  else {
+    const ev = pavedEvidence(tags);
+    if (ev) { paved = true;  basis = 'evidence'; basisText = `Inferred paved from ${ev}`; }
+    else    { paved = false; basis = 'assumed';  basisText = 'No surface tag or paved evidence — assumed unpaved'; }
+  }
+
+  // Vector tiles carry no lighting/footpath tags, so don't guess there.
+  if (overview && basis === 'assumed') return null;
+
+  const type = paved ? (cls === 'track' ? 'service' : cls) : (cls === 'track' ? 'track' : 'unpaved');
+  return { type, cls, paved, basis, basisText, assumed: basis === 'assumed' || basis === 'unrecognised' };
+}
+
+function roadStyle(type, assumed, zoom) {
+  const cfg   = ROAD_TYPES[type];
+  const scale = zoom < 10 ? 0.6 : zoom < 12 ? 0.8 : zoom < 14 ? 1 : zoom < 16 ? 1.25 : 1.5;
+  const dim   = focusMode !== 'all' && (focusMode === 'paved') !== cfg.paved;
+  const boost = focusMode === 'all' ? 1 : (dim ? 0.7 : 1.15);
+  return {
+    color: cfg.color,
+    weight: Math.max(1, cfg.weight * scale * boost),
+    opacity: dim ? 0.28 : cfg.opacity,
+    dashArray: assumed ? '6 5' : null,
+  };
 }
 
 let overviewRoadLayer = null;
@@ -759,26 +866,17 @@ function setOverviewRoadLayerVisible(visible) {
         public_transport: hiddenTileLayer,
         pois: hiddenTileLayer,
         streets: (properties, zoom) => {
-          // Shortbread's `kind` is the OSM highway value; its tiles also carry
-          // `surface`, so the overview uses the same road classification.
-          const highway = String(properties.kind || '').replace(/_link$/, '');
-          const tags = {
-            highway,
+          const hidden = { color: '#000000', weight: 0, opacity: 0 };
+          if (properties.rail) return hidden;
+          // Shortbread's `kind` is the OSM highway value; tiles also carry `surface`.
+          const info = classifyRoad({
+            highway: String(properties.kind || ''),
             surface: properties.surface || '',
             tracktype: properties.tracktype || '',
-          };
-          if (properties.rail) return { color: '#000000', weight: 0, opacity: 0 };
-          const type = getRoadType(tags);
-          if (!type || !activeFilters.has(type)) {
-            return { color: '#000000', weight: 0, opacity: 0 };
-          }
-          // At the default wide view, keep local streets sparse and reserve
-          // unpaved styling for closer zooms where surface tags are available.
-          if ((zoom < 10 && type === 'local') || (zoom < 11 && type === 'unpaved')) {
-            return { color: '#000000', weight: 0, opacity: 0 };
-          }
-          const cfg = ROAD_TYPES[type];
-          return { color: cfg.color, weight: Math.max(1.2, cfg.weight * (zoom < 10 ? 0.55 : 0.75)), opacity: cfg.opacity };
+            service: properties.service || '',
+          }, { overview: true });
+          if (!info || !activeFilters.has(info.type) || zoom < ROAD_TYPES[info.type].minZoom) return hidden;
+          return roadStyle(info.type, false, zoom);
         },
       },
     });
@@ -790,46 +888,74 @@ function setOverviewRoadLayerVisible(visible) {
   return true;
 }
 
-function renderRoads() {
-  roadLayer.clearLayers();
-  allRoads.forEach(({ type, hierarchyType, latlngs, tags, name }) => {
-    const shownType = type || hierarchyType;
-    if (!shownType || !activeFilters.has(shownType)) return;
-    const cfg  = ROAD_TYPES[shownType];
-    const line = L.polyline(latlngs, { color: cfg.color, weight: cfg.weight, opacity: cfg.opacity });
-    line.on('click',     () => showRoadInfo(name, shownType, tags, type, hierarchyType));
-    line.on('mouseover', function() { this.setStyle({ weight: cfg.weight + 2, opacity: 1 }); });
-    line.on('mouseout',  function() { this.setStyle({ weight: cfg.weight, opacity: cfg.opacity }); });
-    const displayName = name || tags.ref || 'Unnamed Road';
-    line.bindPopup(`
-      <div class="popup-title">${displayName}</div>
-      <div class="popup-type" style="color:${cfg.color}">${cfg.label}</div>
-      ${tags.surface  ? `<div class="popup-meta">Surface: ${tags.surface}</div>` : type === 'unpaved' ? '<div class="popup-meta">Surface: Unpaved (locally inferred)</div>' : ''}
-      ${hierarchyType ? `<div class="popup-meta">Road class: ${ROAD_TYPES[hierarchyType].label}</div>` : ''}
-      ${tags.maxspeed ? `<div class="popup-meta">Speed: ${tags.maxspeed} km/h</div>` : ''}
-    `, { maxWidth: 220 });
-    roadLayer.addLayer(line);
-  });
+function surfaceLabel(r) {
+  const tagged = r.tags.surface ? ` (${esc(r.tags.surface)})` : '';
+  return (r.paved ? 'Paved' : 'Unpaved') + tagged + (r.assumed && !tagged ? ' — assumed, no surface tag' : '');
 }
 
-function showRoadInfo(name, type, tags, surfaceType = type, hierarchyType = null) {
-  const cfg         = ROAD_TYPES[type];
-  const el          = document.getElementById('roadInfo');
-  const ph          = document.getElementById('placeholderText');
-  const displayName = name || tags.ref || 'Unnamed Road';
-  const surface     = tags.surface || (surfaceType === 'unpaved' ? 'Unpaved (inferred)' : 'Not specified');
+function popupHtml(r) {
+  const cfg = ROAD_TYPES[r.type];
+  return `
+    <div class="popup-title">${esc(r.name || r.tags.ref || 'Unnamed Road')}</div>
+    <div class="popup-type" style="color:${cfg.color}">${cfg.label}</div>
+    <div class="popup-meta">Surface: ${surfaceLabel(r)}</div>
+    <div class="popup-meta">Class: ${esc(r.tags.highway)}</div>
+    ${r.tags.maxspeed ? `<div class="popup-meta">Speed: ${esc(r.tags.maxspeed)} km/h</div>` : ''}`;
+}
+
+function renderRoads() {
+  roadLayer.clearLayers();
+  const zoom = map.getZoom();
+  if (allRoads.length) {
+    roadCounts = {};
+    Object.keys(ROAD_TYPES).forEach(k => roadCounts[k] = 0);
+  }
+  const visible = [];
+  allRoads.forEach(r => {
+    if (zoom < ROAD_TYPES[r.type].minZoom) return;   // more road types appear as you zoom in
+    roadCounts[r.type]++;
+    if (activeFilters.has(r.type)) visible.push(r);
+  });
+
+  // Draw highlighted roads last so they sit on top; major roads above minor ones.
+  const highlighted = r => focusMode === 'all' || (focusMode === 'paved') === ROAD_TYPES[r.type].paved;
+  visible.sort((a, b) => (highlighted(a) - highlighted(b)) || (ROAD_TYPES[a.type].weight - ROAD_TYPES[b.type].weight));
+
+  visible.forEach(r => {
+    const base = roadStyle(r.type, r.assumed, zoom);
+    const line = L.polyline(r.latlngs, base);
+    line.on('click',     () => showRoadInfo(r));
+    line.on('mouseover', function() { this.setStyle({ weight: base.weight + 2, opacity: 1 }); });
+    line.on('mouseout',  function() { this.setStyle(base); });
+    line.bindPopup(popupHtml(r), { maxWidth: 240 });
+    roadLayer.addLayer(line);
+  });
+  renderLegend();
+  updateStats();
+}
+
+function showRoadInfo(r) {
+  const cfg = ROAD_TYPES[r.type];
+  const t   = r.tags;
+  const el  = document.getElementById('roadInfo');
+  const ph  = document.getElementById('placeholderText');
   el.innerHTML = `
-    <div class="road-name">${displayName}</div>
+    <div class="road-name">${esc(r.name || t.ref || 'Unnamed Road')}</div>
     <div class="road-badge" style="background:${cfg.color}22;color:${cfg.color};border:1px solid ${cfg.color}55">${cfg.label}</div>
     <div class="road-detail">
       ${cfg.desc}<br><br>
-      <strong>Surface:</strong> ${surface}<br>
-      ${hierarchyType ? `<strong>Road class:</strong> ${ROAD_TYPES[hierarchyType].label}<br>` : ''}
-      <strong>Lanes:</strong> ${tags.lanes ? tags.lanes + ' lanes' : 'Unknown'}<br>
-      <strong>Speed limit:</strong> ${tags.maxspeed ? tags.maxspeed + ' km/h' : 'Not specified'}<br>
-      <strong>Lighting:</strong> ${tags.lit === 'yes' ? 'Yes' : tags.lit === 'no' ? 'No' : 'Unknown'}<br>
-      ${tags.ref     ? `<strong>Route ref:</strong> ${tags.ref}<br>` : ''}
-      ${tags.oneway === 'yes' ? '<strong>One-way</strong><br>' : ''}
+      <strong>Surface:</strong> ${surfaceLabel(r)}<br>
+      <strong>Basis:</strong> ${esc(r.basisText)}<br>
+      <strong>OSM class:</strong> ${esc(t.highway)}<br>
+      ${t.tracktype ? `<strong>Track type:</strong> ${esc(t.tracktype)}<br>` : ''}
+      ${t.smoothness ? `<strong>Smoothness:</strong> ${esc(t.smoothness)}<br>` : ''}
+      <strong>Lanes:</strong> ${t.lanes ? esc(t.lanes) + ' lanes' : 'Unknown'}<br>
+      <strong>Speed limit:</strong> ${t.maxspeed ? esc(t.maxspeed) + ' km/h' : 'Not specified'}<br>
+      <strong>Lighting:</strong> ${t.lit === 'yes' ? 'Yes' : t.lit === 'no' ? 'No' : 'Unknown'}<br>
+      ${t.ref ? `<strong>Route ref:</strong> ${esc(t.ref)}<br>` : ''}
+      ${t.oneway === 'yes' ? '<strong>One-way</strong><br>' : ''}
+      ${r.assumed ? '<br><em>Wrong? Add a surface=* tag to this way in OpenStreetMap and the map will update.</em><br>' : ''}
+      ${r.id ? `<a href="https://www.openstreetmap.org/way/${esc(r.id)}" target="_blank" rel="noopener">View way ${esc(r.id)} on OpenStreetMap</a>` : ''}
     </div>`;
   el.classList.add('visible');
   ph.style.display = 'none';
@@ -839,13 +965,13 @@ function showRoadInfo(name, type, tags, surfaceType = type, hierarchyType = null
 // STATS
 // ═══════════════════════════════════════════
 function updateStats() {
-  const total    = allRoads.length;
-  const sealed   = allRoads.filter(r => r.type !== 'unpaved').length;
-  const unsealed = allRoads.filter(r => r.type === 'unpaved').length;
-  document.getElementById('totalRoads').textContent    = total > 999 ? (total/1000).toFixed(1)+'k' : total || '—';
-  document.getElementById('sealedPct').textContent     = total ? Math.round(sealed/total*100)+'%' : '—';
-  document.getElementById('unsealedCount').textContent = unsealed || '—';
-  document.getElementById('highwayCount').textContent  = roadCounts['highway'] || '—';
+  const counts   = roadCountsAvailable ? roadCounts : {};
+  const total    = Object.values(counts).reduce((a, b) => a + b, 0);
+  const unpaved  = Object.entries(counts).filter(([k]) => !ROAD_TYPES[k].paved).reduce((a, [, v]) => a + v, 0);
+  document.getElementById('totalRoads').textContent    = total > 999 ? (total / 1000).toFixed(1) + 'k' : total || '—';
+  document.getElementById('sealedPct').textContent     = total ? Math.round((total - unpaved) / total * 100) + '%' : '—';
+  document.getElementById('unsealedCount').textContent = unpaved || '—';
+  document.getElementById('highwayCount').textContent  = counts['motorway'] || '—';
 }
 
 // ═══════════════════════════════════════════
@@ -872,14 +998,17 @@ function removeZoomMessage() {
 // ═══════════════════════════════════════════
 // LOAD ROADS (cached)
 // ═══════════════════════════════════════════
-function buildQuery(bounds) {
+function buildQuery(bounds, zoom) {
   // Snap to 2 d.p. → wider cache reuse across minor pans
   const snap = n => (Math.floor(n * 100) / 100).toFixed(2);
   const b = `${snap(bounds.getSouth())},${snap(bounds.getWest())},${snap(bounds.getNorth())},${snap(bounds.getEast())}`;
+  // Service roads are only requested once the user is zoomed in far enough to see them.
+  const detail  = zoom >= 14 ? 'full' : 'main';
+  const classes = 'motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|track' + (detail === 'full' ? '|service' : '');
   return {
-    key: `roads:${b}`,
+    key: `roads:${detail}:${b}`,
     url: endpoint => `${endpoint}?data=${encodeURIComponent(
-      `[out:json][timeout:25];(way["highway"~"motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|track|service"](${b}););out geom qt;`
+      `[out:json][timeout:25];(way["highway"~"^(${classes})(_link)?$"](${b}););out geom qt;`
     )}`,
   };
 }
@@ -939,7 +1068,7 @@ async function loadRoads() {
     roadLayer.clearLayers();
     allRoads = [];
     roadCountsAvailable = false;
-    document.getElementById('placeholderText').textContent = 'Zoom in to level 8+ to show major paved roads; zoom to level 11+ for local road and surface detail.';
+    document.getElementById('placeholderText').textContent = 'Zoom in to level 8+ to see motorways and primary roads. More road types appear as you zoom, with full surface detail from level 11.';
     renderLegend();
     updateStats();
     showZoomMessage();
@@ -956,7 +1085,7 @@ async function loadRoads() {
     updateStats();
     document.getElementById('loadingOverlay').style.display = 'none';
     document.getElementById('placeholderText').textContent = overviewLoaded
-      ? 'Main road classes are shown from map tiles. Zoom in to level 11 for local and detailed surface data.'
+      ? 'Main roads are shown from map tiles. Zoom in to level 11 for local streets and full surface analysis.'
       : 'The road overview tiles could not be loaded; zoom in to level 11 to request detailed road data.';
     removeZoomMessage();
     return;
@@ -967,7 +1096,7 @@ async function loadRoads() {
   document.getElementById('loadingText').textContent = 'LOADING ROAD DATA…';
   document.getElementById('loadingOverlay').style.display = 'flex';
 
-  const { key, url } = buildQuery(bounds);
+  const { key, url } = buildQuery(bounds, zoom);
 
   try {
     const { data, fromCache, stale } = await fetchRoadData(key, url);
@@ -982,20 +1111,13 @@ async function loadRoads() {
 
     (data.elements || data).forEach(el => {
       if (el.type !== 'way' || !el.geometry) return;
-      const latlngs = el.geometry.map(p => [p.lat, p.lon]);
       const tags = el.tags || {};
-      const type = getRoadType(tags);
-      const hierarchyType = getHierarchyRoadType(tags);
-      if (!type && !hierarchyType) return;
-      if (overview && type === 'unpaved') return;
-      const displayType = type || hierarchyType;
-      allRoads.push({ type: displayType, hierarchyType, latlngs, tags, name: tags.name || '' });
-      roadCounts[displayType] = (roadCounts[displayType] || 0) + 1;
+      const info = classifyRoad(tags);
+      if (!info) return;
+      allRoads.push({ ...info, id: el.id, latlngs: el.geometry.map(p => [p.lat, p.lon]), tags, name: tags.name || '' });
     });
 
     renderRoads();
-    renderLegend();
-    updateStats();
     document.getElementById('placeholderText').textContent = stale
       ? 'Showing saved road data because live updates are unavailable. Pan or zoom to retry.'
       : 'Click any road on the map to view its surface type and details.';
@@ -1095,6 +1217,7 @@ function scheduleLoad() {
 
 map.on('moveend', scheduleLoad);
 map.on('zoomend', scheduleLoad);
+map.on('zoomend', () => { if (map.getZoom() >= 11 && allRoads.length) renderRoads(); else renderLegend(); });
 map.on('moveend', scheduleGeoUpdate);
 
 // Init
